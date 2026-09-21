@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#6c5ce7">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Belajar SD">
+  <link rel="stylesheet" href="styles.css">
+  <title>Dashboard Siswa</title>
+</head>
+<body>
+  <header class="app-header">
+    <span class="title">LUDUS</span>
+    <div class="user-info">
+      <span class="header-clock" id="liveClock">—</span>
+      <span class="name" id="userName">—</span>
+      <span class="badge" id="userKelas">—</span>
+      <button class="btn-logout" onclick="logout()">Keluar</button>
+    </div>
+  </header>
+
+  <div class="page-wrap">
+    <h2 class="page-title">Pilih Modul Belajar</h2>
+    <div id="moduleGrid" class="module-grid">
+      <div class="loading">Memuat modul...</div>
+    </div>
+  </div>
+
+  <script type="module" src="siswa.js"></script>
+  <script src="sw-register.js"></script>
+</body>
+</html>

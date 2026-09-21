@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#6c5ce7">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Belajar SD">
+  <link rel="stylesheet" href="styles.css">
+  <title>LUDUS</title>
+  <meta property="og:image" content="https://bolt.new/static/og_default.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://bolt.new/static/og_default.png">
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <h1> LUDUS </h1>
+      <p class="subtitle">Aplikasi Belajar untuk anak Sekolah Dasar</p>
+
+      <div class="role-tabs">
+        <button class="role-tab active" id="tabSiswa" onclick="switchRole('siswa')">Siswa</button>
+        <button class="role-tab" id="tabGuru" onclick="switchRole('guru')">Guru</button>
+      </div>
+
+      <div class="error-msg" id="errorMsg"></div>
+
+      <!-- Siswa form -->
+      <form id="formSiswa" onsubmit="return loginSiswa(event)">
+        <div class="form-group">
+          <label for="siswaNama">Nama</label>
+          <input type="text" id="siswaNama" placeholder="Tulis nama kamu" autocomplete="off" required>
+        </div>
+        <div class="form-group">
+          <label for="siswaPassword">Password</label>
+          <input type="password" id="siswaPassword" placeholder="Tulis password" required>
+        </div>
+        <div class="form-group">
+          <label for="siswaKelas">Kelas</label>
+          <select id="siswaKelas" required>
+            <option value="">Pilih kelas</option>
+            <option value="3">Kelas 3</option>
+            <option value="4">Kelas 4</option>
+            <option value="5">Kelas 5</option>
+            <option value="6">Kelas 6</option>
+          </select>
+        </div>
+        <button type="submit" class="btn-primary btn-big">Masuk</button>
+      </form>
+
+      <!-- Guru form -->
+      <form id="formGuru" onsubmit="return loginGuru(event)" style="display:none;">
+        <div class="form-group">
+          <label for="guruNama">Nama</label>
+          <input type="text" id="guruNama" placeholder="Tulis nama guru" autocomplete="off" required>
+        </div>
+        <div class="form-group">
+          <label for="guruPassword">Password</label>
+          <input type="password" id="guruPassword" placeholder="Tulis password" required>
+        </div>
+        <div class="form-group">
+          <label for="guruKode">Kode Guru</label>
+          <input type="password" id="guruKode" placeholder="Masukkan kode guru" required>
+        </div>
+        <button type="submit" class="btn-primary btn-big">Masuk</button>
+      </form>
+    </div>
+  </div>
+
+  <script type="module" src="login.js"></script>
+  <script src="sw-register.js"></script>
+</body>
+</html>

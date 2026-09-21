@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#6c5ce7">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Belajar SD">
+  <link rel="stylesheet" href="styles.css">
+  <title>Dashboard Guru</title>
+</head>
+<body>
+  <header class="app-header">
+    <span class="title">Dashboard Guru</span>
+    <div class="user-info">
+      <span class="name" id="userName">—</span>
+      <span class="badge">Guru</span>
+      <button class="btn-logout" onclick="logout()">Keluar</button>
+    </div>
+  </header>
+
+  <div class="page-wrap">
+    <div class="nav-tabs" id="navTabs">
+      <button class="nav-tab active" data-tab="siswa" onclick="switchTab('siswa')">Daftar Siswa</button>
+      <button class="nav-tab" data-tab="esai" onclick="switchTab('esai')">Penilaian Esai</button>
+      <button class="nav-tab" data-tab="prompt" onclick="switchTab('prompt')">Buat Soal</button>
+      <button class="nav-tab" data-tab="drop" onclick="switchTab('drop')">Drop Soal</button>
+      <button class="nav-tab" data-tab="pengaturan" onclick="switchTab('pengaturan')">Pengaturan</button>
+    </div>
+
+    <!-- Tab: Siswa -->
+    <div class="tab-content active" id="tabSiswa">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+        <h2 class="page-title" style="margin-bottom:0;">Daftar Siswa</h2>
+        <button class="btn-primary" style="width:auto;" onclick="toggleAddStudentForm()" id="btnToggleAddStudent">+ Tambah Siswa</button>
+      </div>
+
+      <div class="card" id="addStudentCard" style="display:none; max-width:500px; margin-top:16px;">
+        <h3 style="margin-bottom:12px;">Tambah Siswa Baru</h3>
+        <div class="form-group">
+          <label for="newSiswaNama">Nama Siswa</label>
+          <input type="text" id="newSiswaNama" placeholder="Nama lengkap siswa" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="newSiswaKelas">Kelas</label>
+          <select id="newSiswaKelas">
+            <option value="3">Kelas 3</option>
+            <option value="4">Kelas 4</option>
+            <option value="5">Kelas 5</option>
+            <option value="6">Kelas 6</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="newSiswaPassword">Password Siswa</label>
+          <input type="text" id="newSiswaPassword" placeholder="Buat password untuk siswa ini" autocomplete="off">
+        </div>
+        <div id="addStudentMsg" class="error-msg" style="display:none;"></div>
+        <div style="display:flex; gap:12px;">
+          <button class="btn-primary" onclick="submitNewStudent()">Simpan Siswa</button>
+          <button class="btn-outline" onclick="toggleAddStudentForm()">Batal</button>
+        </div>
+      </div>
+
+      <div class="class-tabs" id="classTabs"></div>
+      <div id="studentList" class="student-list">
+        <div class="loading">Memuat data siswa...</div>
+      </div>
+    </div>
+
+    <!-- Tab: Esai -->
+    <div class="tab-content" id="tabEsai">
+      <h2 class="page-title">Jawaban Esai Menunggu Penilaian</h2>
+      <div id="esaiList" class="student-list">
+        <div class="loading">Memuat jawaban esai...</div>
+      </div>
+    </div>
+
+    <!-- Tab: Prompt Generator -->
+    <div class="tab-content" id="tabPrompt">
+      <h2 class="page-title">Prompt AI</h2>
+      <div class="card" style="max-width:700px;">
+        <div class="form-group">
+          <label for="promptKelas">Kelas</label>
+          <select id="promptKelas">
+            <option value="3">Kelas 3</option>
+            <option value="4">Kelas 4</option>
+            <option value="5">Kelas 5</option>
+            <option value="6">Kelas 6</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="promptJudul">Judul Modul Ajar</label>
+          <input type="text" id="promptJudul" placeholder="Misal: Wawasan Kebangsaan, Biologi, Bahasa Inggris">
+        </div>
+        <div class="form-group">
+          <label>Jumlah Soal per Tipe</label>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div>
+              <label for="promptPG" style="font-weight:500; font-size:0.85rem;">Objektif / Pilihan Ganda</label>
+              <input type="number" id="promptPG" min="0" max="50" value="8" oninput="updatePromptTotal()">
+            </div>
+            <div>
+              <label for="promptIsian" style="font-weight:500; font-size:0.85rem;">Isian</label>
+              <input type="number" id="promptIsian" min="0" max="50" value="5" oninput="updatePromptTotal()">
+            </div>
+            <div>
+              <label for="promptEsai" style="font-weight:500; font-size:0.85rem;">Esai (Isian Kompleks)</label>
+              <input type="number" id="promptEsai" min="0" max="50" value="3" oninput="updatePromptTotal()">
+            </div>
+            <div>
+              <label for="promptSambung" style="font-weight:500; font-size:0.85rem;">Menjodohkan (Sambung)</label>
+              <input type="number" id="promptSambung" min="0" max="50" value="4" oninput="updatePromptTotal()">
+            </div>
+          </div>
+          <div style="margin-top:8px; font-size:0.85rem; color:var(--text-muted);">Total soal: <strong id="promptTotalDisplay">20</strong></div>
+        </div>
+        <div class="form-group">
+          <label for="promptLevel">Level Kesulitan : <span id="levelDisplay">3</span></label>
+          <input type="range" id="promptLevel" min="1" max="6" value="3" oninput="document.getElementById('levelDisplay').textContent=this.value">
+        </div>
+        <div class="form-group">
+          <label for="promptMateri">Drop Materi</label>
+          <textarea id="promptMateri" placeholder="Silakan isi dengan materi yang Bapak/Ibu jelaskan dikelas.... (digunakan sebagai patokan dalam pembuatan soal)" style="min-height:200px; max-height:500px;"></textarea>
+        </div>
+        <button class="btn-primary btn-big" onclick="generatePrompt()">Berikan Prompt</button>
+      </div>
+      <div id="promptResult" style="margin-top:20px; display:none;">
+        <div class="card" style="max-width:700px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3>Hasil Prompt</h3>
+            <button class="btn-secondary" onclick="copyPrompt()">Salin</button>
+          </div>
+          <textarea id="promptOutput" readonly style="min-height:300px; max-height:600px; font-family:monospace; font-size:0.85rem;"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Drop Soal -->
+    <div class="tab-content" id="tabDrop">
+      <h2 class="page-title">Drop Soal</h2>
+      <div class="card" style="max-width:700px;">
+        <p style="color:var(--text-muted); margin-bottom:16px;">Tempelkan Code JSON soal hasil dari AI di bawah ini.</p>
+        <div class="form-group">
+          <textarea id="dropJson" placeholder='{"judul": "...", "kelas": 4, "level": 3, "soal": [...]}' style="min-height:250px; max-height:500px; font-family:monospace; font-size:0.85rem;"></textarea>
+        </div>
+        <div id="dropMsg" class="error-msg" style="display:none;"></div>
+        <div id="dropSuccess" style="display:none; background:var(--secondary-light); color:var(--secondary-dark); padding:12px 16px; border-radius:var(--radius); margin-bottom:16px; font-size:0.9rem;"></div>
+        <div style="display:flex; gap:12px;">
+          <button class="btn-outline" onclick="validateJson()">Cek Soal</button>
+          <button class="btn-primary" id="applyBtn" onclick="applyJson()" disabled style="opacity:0.5; pointer-events:none;">Gunakan Soal</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Pengaturan -->
+    <div class="tab-content" id="tabPengaturan">
+      <h2 class="page-title">Pengaturan</h2>
+      <div class="card" style="max-width:600px;">
+        <h3 style="color:var(--error); margin-bottom:12px;">Zona Berbahaya</h3>
+        <p style="color:var(--text-muted); margin-bottom:16px; font-size:0.92rem;">
+          Tombol "Reset Total" akan menghapus SEMUA data di aplikasi ini termasuk semua data siswa, modul, dan jawaban esai.
+          Aksi ini tidak bisa dibatalkan atau dikembalikan!
+        </p>
+        <div class="form-group">
+          <label for="resetCode">Kode Akses</label>
+          <input type="password" id="resetCode" placeholder="Masukkan kode akses (dimiliki ADMIN)">
+        </div>
+        <button class="btn-danger" onclick="checkResetCode()">Buka Reset Total</button>
+        <div id="resetConfirm" style="display:none; margin-top:20px; padding-top:20px; border-top:1px solid var(--border);">
+          <p style="color:#991b1b; font-weight:600; margin-bottom:12px;">
+            PERINGATAN: Semua data SEMUA pengguna akan dihapus. Ketik HAPUS untuk konfirmasi.
+          </p>
+          <div class="form-group">
+            <label for="resetConfirmInput">Ketik "HAPUS"</label>
+            <input type="text" id="resetConfirmInput" placeholder="HAPUS">
+          </div>
+          <button class="btn-danger btn-big" onclick="executeReset()">Hapus Semua Data Sekarang</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="guru.js"></script>
+  <script src="sw-register.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // This app uses its own login records rather than Firebase Authentication.
+    // Keep this permissive until the login flow is moved to Firebase Auth.
+    match /users/{uid} {
+      allow read, create, update, delete: if true;
+    }
+    match /modules/{id} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if true;
+    }
+    match /esai_jawaban/{id} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if true;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

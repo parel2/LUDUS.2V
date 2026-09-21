@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#6c5ce7">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Belajar SD">
+  <link rel="stylesheet" href="styles.css">
+  <title>Kerjakan Soal</title>
+</head>
+<body>
+  <header class="app-header">
+    <span class="title" id="quizTitle">Kerjakan Soal</span>
+    <div class="user-info">
+      <button class="btn-logout" onclick="goBack()">Kembali</button>
+    </div>
+  </header>
+
+  <div class="quiz-wrap" id="quizContent"></div>
+
+  <script type="module" src="kuis.js"></script>
+  <script src="sw-register.js"></script>
+</body>
+</html>
