@@ -10,7 +10,7 @@ import {
   onSnapshot,
 } from "./firebase-config.js";
 import { normalizeQuestion } from "./module-normalize.js";
-import { waitForWriteSync, isOnline } from "./sync-helpers.js";
+import { waitForWriteSync } from "./sync-helpers.js";
 
 const user = JSON.parse(sessionStorage.getItem("user") || "null");
 const activeModule = JSON.parse(sessionStorage.getItem("activeModule") || "null");
@@ -19,22 +19,30 @@ if (!user || user.role !== "siswa" || !activeModule) {
   window.location.href = "siswa.html";
 }
 
-window.goBack = function () {
-  window.location.href = "siswa.html";
+const draftKey = `quizDraft:${user.uid}:${activeModule.id}`;
+
+let quizState = {
+  currentIndex: 0,
+  answers: [],
 };
 
-document.getElementById("quizTitle").textContent = "📖 " + (activeModule.judul || "Soal");
+function saveDraft() {
+  try {
+    const payload = {
+      moduleId: activeModule.id,
+      currentIndex: quizState.currentIndex,
+      answers: quizState.answers,
+      updatedAt: Date.now(),
+    };
+    localStorage.setItem(draftKey, JSON.stringify(payload));
+  } catch (err) {
+    console.warn("Gagal menyimpan draft kuis:", err);
+  }
+}
 
-const rawSoalList = activeModule.soal || [];
-const soalList = rawSoalList.map((s, i) => normalizeQuestion(s, i)).filter(Boolean);
-const content = document.getElementById("quizContent");
-
-const savedProgress = JSON.parse(sessionStorage.getItem("activeProgress") || "null");
-const existingProgress =
-  savedProgress ||
-  (user.progress || []).find((p) => p.moduleId === activeModule.id);
-
-const draftKey = `quizDraft:${user.uid}:${activeModule.id}`;
+function clearDraft() {
+  localStorage.removeItem(draftKey);
+}
 
 function loadDraft() {
   try {
@@ -42,7 +50,6 @@ function loadDraft() {
     if (!raw) return null;
 
     const draft = JSON.parse(raw);
-
     if (
       !draft ||
       !Array.isArray(draft.answers) ||
@@ -53,29 +60,9 @@ function loadDraft() {
 
     return draft;
   } catch (err) {
-    console.warn("Draft soal tidak valid:", err);
+    console.warn("Draft tidak valid:", err);
     return null;
   }
-}
-
-function saveDraft(currentIndex, answers) {
-  try {
-    localStorage.setItem(
-      draftKey,
-      JSON.stringify({
-        moduleId: activeModule.id,
-        answers,
-        currentIndex,
-        updatedAt: Date.now(),
-      })
-    );
-  } catch (err) {
-    console.warn("Gagal menyimpan draft soal:", err);
-  }
-}
-
-function clearDraft() {
-  localStorage.removeItem(draftKey);
 }
 
 function hasAnyAnswer(answers) {
@@ -87,14 +74,32 @@ function hasAnyAnswer(answers) {
   });
 }
 
-// Jika modul sudah selesai atau menunggu dinilai, tampilkan review
+window.goBack = function () {
+  saveDraft();
+  window.location.href = "siswa.html";
+};
+
+window.addEventListener("beforeunload", saveDraft);
+window.addEventListener("pagehide", saveDraft);
+
+document.getElementById("quizTitle").textContent = "📖 " + (activeModule.judul || "Soal");
+
+const rawSoalList = activeModule.soal || [];
+const soalList = rawSoalList.map((s, i) => normalizeQuestion(s, i)).filter(Boolean);
+
+const content = document.getElementById("quizContent");
+
+const savedProgress = JSON.parse(sessionStorage.getItem("activeProgress") || "null");
+const existingProgress =
+  savedProgress ||
+  (user.progress || []).find((p) => p.moduleId === activeModule.id);
+
 if (existingProgress && ["selesai", "menunggu_dinilai"].includes(existingProgress.status)) {
   showReviewMode(existingProgress);
 } else {
   startQuiz();
 }
 
-// ============ REVIEW MODE ============
 function showReviewMode(progress) {
   renderReview(progress, []);
 
@@ -123,7 +128,7 @@ function renderReview(progress, essayAnswers) {
   const totalQuestions = soalList.length;
   const autoCorrect = Number(progress.correctCount) || 0;
   const pendingCount = Number(progress.pendingCount) || 0;
-  const finalScore = progress.score || 0;
+  const finalScore = Number(progress.score) || 0;
   const hasPending = progress.status === "menunggu_dinilai" || pendingCount > 0;
 
   let detailHtml = '<div class="result-detail">';
@@ -198,7 +203,6 @@ function renderReview(progress, essayAnswers) {
   `;
 }
 
-// ============ QUIZ MODE ============
 function startQuiz() {
   const savedDraft = loadDraft();
 
@@ -222,6 +226,9 @@ function startQuiz() {
       clearDraft();
     }
   }
+
+  quizState.currentIndex = currentIndex;
+  quizState.answers = answers;
 
   renderQuestion();
 
@@ -277,7 +284,9 @@ function startQuiz() {
         el.addEventListener("click", () => {
           const idx = parseInt(el.dataset.idx);
           answers[currentIndex] = idx;
-          saveDraft(currentIndex, answers);
+          quizState.currentIndex = currentIndex;
+          quizState.answers = answers;
+          saveDraft();
 
           document.querySelectorAll(".option").forEach((o) => o.classList.remove("selected"));
           el.classList.add("selected");
@@ -287,35 +296,59 @@ function startQuiz() {
       const input = document.getElementById("isianInput");
       input.addEventListener("input", () => {
         answers[currentIndex] = input.value;
-        saveDraft(currentIndex, answers);
+        quizState.currentIndex = currentIndex;
+        quizState.answers = answers;
+        saveDraft();
       });
     } else if (soal.tipe === "isian_kompleks") {
       const input = document.getElementById("esaiInput");
       input.addEventListener("input", () => {
         answers[currentIndex] = input.value;
-        saveDraft(currentIndex, answers);
+        quizState.currentIndex = currentIndex;
+        quizState.answers = answers;
+        saveDraft();
       });
     }
   }
 
   function renderMatchQuestion(soal) {
     const blanks = soal.kalimat || [];
-    const bank = soal.bank || [];
+    const bank = soal.bank || soal.pilihan_kata || [];
     const currentAns = answers[currentIndex] || {};
 
     let html = '<div style="margin-bottom:16px;">';
     blanks.forEach((b, i) => {
-      html += `<div style="margin-bottom:12px; font-size:1.1rem;">${escapeHtml(b)} <span class="match-blank ${currentAns[i] ? "" : "empty"}" data-blank="${i}" onclick="removeMatch(${i})">${currentAns[i] ? escapeHtml(currentAns[i]) : "____"}</span></div>`;
+      html += `
+        <div style="margin-bottom:12px; font-size:1.1rem;">
+          ${escapeHtml(b)}
+          <span
+            class="match-blank ${currentAns[i] ? "" : "empty"}"
+            data-blank="${i}"
+            onclick="removeMatch(${i})"
+          >
+            ${currentAns[i] ? escapeHtml(currentAns[i]) : "____"}
+          </span>
+        </div>
+      `;
     });
-    html += "</div>";
 
+    html += "</div>";
     html += '<div class="match-bank">';
+
     bank.forEach((w) => {
       const used = Object.values(currentAns).includes(w);
-      html += `<span class="match-word ${used ? "used" : ""}" data-word="${escapeHtml(w)}" onclick="selectWord('${escapeHtml(w).replace(/'/g, "\\'")}')">${escapeHtml(w)}</span>`;
+      html += `
+        <span
+          class="match-word ${used ? "used" : ""}"
+          data-word="${escapeHtml(w)}"
+          onclick="selectWord('${escapeHtml(w).replace(/'/g, "\\'")}')"
+        >
+          ${escapeHtml(w)}
+        </span>
+      `;
     });
-    html += "</div>";
 
+    html += "</div>";
     return html;
   }
 
@@ -342,7 +375,9 @@ function startQuiz() {
       }
     }
 
-    saveDraft(currentIndex, answers);
+    quizState.currentIndex = currentIndex;
+    quizState.answers = answers;
+    saveDraft();
     renderQuestion();
   };
 
@@ -351,12 +386,17 @@ function startQuiz() {
     delete currentAns[blankIdx];
     answers[currentIndex] = currentAns;
     selectedBlank = blankIdx;
-    saveDraft(currentIndex, answers);
+
+    quizState.currentIndex = currentIndex;
+    quizState.answers = answers;
+    saveDraft();
     renderQuestion();
   };
 
   window.prevQuestion = function () {
-    saveDraft(currentIndex, answers);
+    quizState.currentIndex = currentIndex;
+    quizState.answers = answers;
+    saveDraft();
 
     if (currentIndex > 0) {
       currentIndex--;
@@ -365,7 +405,9 @@ function startQuiz() {
   };
 
   window.nextQuestion = function () {
-    saveDraft(currentIndex, answers);
+    quizState.currentIndex = currentIndex;
+    quizState.answers = answers;
+    saveDraft();
 
     if (currentIndex < soalList.length - 1) {
       currentIndex++;
@@ -478,7 +520,10 @@ function startQuiz() {
       clearDraft();
     } catch (err) {
       console.error("Failed to save progress:", err);
-      clearDraft();
+
+      // JANGAN hapus draft kalau proses simpan gagal.
+      // Biarkan draft tetap ada supaya siswa bisa lanjut.
+      // Jika ingin, saat nanti berhasil bisa ditimpa.
     }
 
     let detailHtml = '<div class="result-detail">';
@@ -488,7 +533,11 @@ function startQuiz() {
 
       if (r.grade.type === "pg") {
         const letters = ["A", "B", "C", "D", "E"];
-        answerText = r.answer !== null ? `Jawaban: ${letters[r.answer] || (r.answer + 1)}` : "Tidak dijawab";
+        answerText =
+          r.answer !== null && r.answer !== undefined
+            ? `Jawaban: ${letters[r.answer] || (r.answer + 1)}`
+            : "Tidak dijawab";
+
         if (!r.grade.correct) {
           answerText += ` | Benar: ${letters[r.soal.jawaban] || (r.soal.jawaban + 1)}`;
         }
@@ -503,7 +552,15 @@ function startQuiz() {
         answerText += parts ? ` (${parts})` : "";
       }
 
-      detailHtml += `<div class="result-item ${cls}"><div class="q">Soal ${i + 1}: ${escapeHtml((r.soal.pertanyaan || "").slice(0, 80))}${(r.soal.pertanyaan || "").length > 80 ? "..." : ""}</div><div class="a">${escapeHtml(answerText)}</div></div>`;
+      detailHtml += `
+        <div class="result-item ${cls}">
+          <div class="q">
+            Soal ${i + 1}: ${escapeHtml((r.soal.pertanyaan || "").slice(0, 80))}
+            ${(r.soal.pertanyaan || "").length > 80 ? "..." : ""}
+          </div>
+          <div class="a">${escapeHtml(answerText)}</div>
+        </div>
+      `;
     });
 
     detailHtml += "</div>";
