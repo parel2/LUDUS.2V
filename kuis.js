@@ -10,6 +10,7 @@ import {
   onSnapshot,
 } from "./firebase-config.js";
 import { normalizeQuestion } from "./module-normalize.js";
+import { waitForWriteSync, isOnline } from "./sync-helpers.js";
 
 const user = JSON.parse(sessionStorage.getItem("user") || "null");
 const activeModule = JSON.parse(sessionStorage.getItem("activeModule") || "null");
@@ -327,12 +328,20 @@ function startQuiz() {
     const pendingCount = results.filter((r) => r.grade.pending).length;
     const score = graded.length > 0 ? Math.round((correctCount / graded.length) * 100) : 0;
 
+    content.innerHTML = `
+      <div class="card result-card">
+        <h2>Menyimpan hasil...</h2>
+        <p style="color:var(--text-muted);">Mohon tunggu, jangan tutup halaman ini.</p>
+      </div>
+    `;
+
     // Save essay answers to esai_jawaban collection
     for (let i = 0; i < soalList.length; i++) {
       if (soalList[i].tipe === "isian_kompleks" && answers[i] && String(answers[i]).trim()) {
         const esaiId = "esai_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
         try {
-          await setDoc(doc(db, "esai_jawaban", esaiId), {
+          const esaiRef = doc(db, "esai_jawaban", esaiId);
+          await setDoc(esaiRef, {
             uidSiswa: user.uid,
             namaSiswa: user.namaDisplay || user.nama,
             kelas: String(user.kelas),
@@ -347,6 +356,7 @@ function startQuiz() {
             submittedAt: Date.now(),
             reviewedAt: null,
           });
+          await waitForWriteSync(esaiRef, 10000);
         } catch (err) {
           console.error("Failed to save essay answer:", err);
         }
@@ -354,6 +364,7 @@ function startQuiz() {
     }
 
     // Save progress to student profile
+    let syncConfirmed = false;
     try {
       const progressEntry = {
         moduleId: activeModule.id,
@@ -373,9 +384,12 @@ function startQuiz() {
         progress: arrayUnion(progressEntry),
         seenModules: arrayUnion(activeModule.id),
       });
+      await waitForWriteSync(userRef, 10000);
+      syncConfirmed = true;
     } catch (err) {
       console.error("Failed to save progress:", err);
     }
+
 
     let detailHtml = '<div class="result-detail">';
     results.forEach((r, i) => {
@@ -404,6 +418,13 @@ function startQuiz() {
     content.innerHTML = `
       <div class="card result-card">
         <h2>Hasil Pengerjaan</h2>
+        ${!syncConfirmed ? `
+          <div style="background:var(--accent-light); color:#92400e; padding:12px 16px; border-radius:var(--radius); margin-bottom:16px; text-align:left; font-size:0.9rem;">
+            ⚠️ Koneksi lemah/terputus — hasil ini <strong>belum terkonfirmasi tersimpan ke server</strong>.
+            Jangan hapus data browser atau uninstall aplikasi di perangkat ini sampai kamu online lagi
+            dan membuka ulang halaman ini untuk memastikan hasilnya sudah tersimpan.
+          </div>
+        ` : ""}
         <div class="result-score">${score}</div>
         <p style="color:var(--text-muted); font-size:1rem;">Benar ${correctCount} dari ${graded.length} soal yang dinilai otomatis</p>
         ${pendingCount > 0 ? `<p style="color:#92400e; margin-top:8px;">${pendingCount} soal menunggu dinilai guru</p>` : ""}
