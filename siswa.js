@@ -25,7 +25,10 @@ document.getElementById("userKelas").textContent = "Kelas " + user.kelas;
 
 // ============ LIVE CLOCK ============
 const DAYS = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
-const MONTHS = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+const MONTHS = [
+  "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
+  "Agustus", "September", "Oktober", "November", "Desember"
+];
 
 function updateClock() {
   const now = new Date();
@@ -93,14 +96,15 @@ function renderModules() {
 
   grid.innerHTML = "";
   allModules.forEach((mod) => {
-    // Each card represents one exact module document, even when titles match.
     const moduleProgress = [...userProgress].reverse().find(
       (p) => p.moduleId === mod.id
     );
     const moduleScore = moduleProgress ? Number(moduleProgress.score) || 0 : null;
     const hasPending = moduleProgress?.status === "menunggu_dinilai";
+    const isCompleted =
+      moduleProgress &&
+      ["selesai", "menunggu_dinilai"].includes(moduleProgress.status);
 
-    // Red dot if not seen
     const isNew = !seenModules.includes(mod.id);
 
     const soalCount = Array.isArray(mod.soal) ? mod.soal.length : 0;
@@ -119,6 +123,12 @@ function renderModules() {
       }
     }
 
+    // kalau modul sudah selesai, tampilkan indikator review
+    if (isCompleted) {
+      card.style.opacity = "0.9";
+      card.title = "Modul sudah selesai. Hanya bisa dilihat hasilnya.";
+    }
+
     card.innerHTML = `
       ${isNew ? '<span class="red-dot"></span>' : ''}
       <div class="module-icon">📖</div>
@@ -127,6 +137,7 @@ function renderModules() {
       ${remedialBadge}
       ${statusHtml}
     `;
+
     card.onclick = () => openModule(mod);
     grid.appendChild(card);
   });
@@ -137,10 +148,18 @@ function openModule(mod) {
   const moduleProgress = [...userProgress].reverse().find(
     (p) => p.moduleId === mod.id
   );
-  sessionStorage.setItem("activeModule", JSON.stringify(normalized));
-  if (moduleProgress) {
+
+  const isCompleted =
+    moduleProgress &&
+    ["selesai", "menunggu_dinilai"].includes(moduleProgress.status);
+
+  // Jika modul sudah selesai, buka dalam mode review
+  // bukan mode kuis ulang.
+  if (isCompleted) {
+    sessionStorage.setItem("activeModule", JSON.stringify(normalized));
     sessionStorage.setItem("activeProgress", JSON.stringify(moduleProgress));
   } else {
+    sessionStorage.setItem("activeModule", JSON.stringify(normalized));
     sessionStorage.removeItem("activeProgress");
   }
 
