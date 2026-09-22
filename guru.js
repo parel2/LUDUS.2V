@@ -6,14 +6,16 @@ import {
   onSnapshot,
   doc,
   getDoc,
+  getDocs,
+  getDocsFromServer,
   updateDoc,
   setDoc,
   deleteDoc,
   writeBatch,
-  getDocs,
 } from "./firebase-config.js";
 import { normalizeTitle, isRemedial, stripRemedialPrefix } from "./module-normalize.js";
 import { hashPassword, normalizeName, generateUid } from "./auth-helpers.js";
+import { waitForWriteSync, waitForDeleteSync, isOnline } from "./sync-helpers.js";
 
 const user = JSON.parse(sessionStorage.getItem("user") || "null");
 if (!user || user.role !== "guru") {
@@ -90,6 +92,21 @@ function showAddStudentError(msg) {
   el.textContent = msg;
   el.classList.add("show");
   el.style.display = "block";
+  el.style.background = "";
+  el.style.color = "";
+}
+
+function showAddStudentPending(msg) {
+  const el = document.getElementById("addStudentMsg");
+  if (!msg) {
+    el.style.display = "none";
+    return;
+  }
+  el.textContent = msg;
+  el.classList.add("show");
+  el.style.display = "block";
+  el.style.background = "var(--accent-light)";
+  el.style.color = "#92400e";
 }
 
 window.submitNewStudent = async function () {
@@ -142,11 +159,41 @@ window.submitNewStudent = async function () {
       createdAt: Date.now(),
       createdBy: user.uid,
     };
+
+    const saveBtn = document.getElementById("btnSubmitNewStudent");
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Menyimpan...";
+    }
+    showAddStudentPending("Menyimpan ke server, mohon tunggu... Jangan tutup halaman ini.");
+
     await setDoc(doc(db, "users", newUid), newProfile);
 
+    // JANGAN langsung anggap berhasil setelah setDoc() — kalau koneksi lemah/offline,
+    // data bisa cuma tersimpan di cache lokal perangkat ini dan belum benar-benar
+    // sampai ke server, sehingga tidak terlihat oleh siswa di perangkat lain.
+    await waitForWriteSync(doc(db, "users", newUid));
+
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Simpan Siswa";
+    }
+    showAddStudentPending("");
     window.toggleAddStudentForm();
     activeClass = kelas;
   } catch (err) {
+    const saveBtn = document.getElementById("btnSubmitNewStudent");
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Simpan Siswa";
+    }
+    if (err && err.message === "TIMEOUT") {
+      showAddStudentError(
+        "Belum ada konfirmasi dari server setelah 15 detik — kemungkinan koneksi internet lemah/terputus. " +
+        "Data MUNGKIN belum benar-benar tersimpan. JANGAN tutup halaman ini, tunggu koneksi kembali, lalu coba periksa apakah siswa sudah muncul di daftar sebelum menambahkan ulang (supaya tidak dobel)."
+      );
+      return;
+    }
     console.error("Gagal menambahkan siswa:", err);
     showAddStudentError("Gagal menyimpan siswa: " + err.message);
   }
@@ -159,12 +206,39 @@ window.deleteStudent = async function (studentId, studentName, event) {
   const ok = confirm(`Hapus siswa "${studentName}"? Seluruh data nilai siswa ini juga akan terhapus. Aksi ini tidak bisa dibatalkan.`);
   if (!ok) return;
 
+  if (!isOnline()) {
+    alert("Kamu sedang offline. Sambungkan ke internet dulu sebelum menghapus siswa, supaya perubahan benar-benar sampai ke server.");
+    return;
+  }
+
   try {
-    await deleteDoc(doc(db, "users", studentId));
+    const studentRef = doc(db, "users", studentId);
+    await deleteDoc(studentRef);
+    await waitForDeleteSync(studentRef);
+
+    // Bersihkan jawaban esai milik siswa ini supaya tidak ada data "yatim"
+    const esaiSnap = await getDocs(
+      query(collection(db, "esai_jawaban"), where("uidSiswa", "==", studentId))
+    );
+    const esaiIds = [];
+    esaiSnap.forEach((d) => esaiIds.push(d.id));
+    for (const esaiId of esaiIds) {
+      const esaiRef = doc(db, "esai_jawaban", esaiId);
+      await deleteDoc(esaiRef);
+      await waitForDeleteSync(esaiRef);
+    }
+
     if (detailStudentId === studentId) {
       detailStudentId = null;
     }
   } catch (err) {
+    if (err && err.isTimeout) {
+      alert(
+        `Belum ada konfirmasi dari server dalam 15 detik untuk penghapusan "${studentName}". ` +
+        `Kemungkinan koneksi lemah/terputus — periksa lagi apakah siswa ini masih muncul di daftar sebelum mencoba menghapus ulang.`
+      );
+      return;
+    }
     console.error("Gagal menghapus siswa:", err);
     alert("Gagal menghapus siswa: " + err.message);
   }
@@ -503,17 +577,41 @@ window.submitEsaiNilai = async function (esaiId) {
     return;
   }
 
+  if (!isOnline()) {
+    alert("Kamu sedang offline. Sambungkan ke internet dulu sebelum menyimpan nilai, supaya nilai benar-benar sampai ke server dan tidak hilang.");
+    return;
+  }
+
+  const btn = document.querySelector(`button[onclick="submitEsaiNilai('${esaiId}')"]`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Menyimpan ke server...";
+  }
+
   try {
-    await updateDoc(doc(db, "esai_jawaban", esaiId), {
+    const esaiRef = doc(db, "esai_jawaban", esaiId);
+    await updateDoc(esaiRef, {
       status: "dinilai",
       nilai: nilai,
       dinilaiOleh: user.uid,
       dinilaiOlehNama: user.namaDisplay || user.nama,
       reviewedAt: Date.now(),
     });
+    await waitForWriteSync(esaiRef);
     await syncStudentModuleProgress(esaiId, nilai);
     renderEsai();
   } catch (err) {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Setujui & Simpan Nilai";
+    }
+    if (err && err.isTimeout) {
+      alert(
+        "Belum ada konfirmasi dari server dalam 15 detik. Kemungkinan koneksi lemah/terputus — " +
+        "JANGAN tutup halaman ini, tunggu koneksi kembali, lalu periksa lagi apakah nilai sudah tersimpan sebelum mencoba ulang."
+      );
+      return;
+    }
     console.error("Failed to submit grade:", err);
     alert("Gagal menyimpan nilai. Coba lagi.");
   }
@@ -555,6 +653,7 @@ async function syncStudentModuleProgress(esaiId, currentNilai) {
   });
 
   await updateDoc(studentRef, { progress: updatedProgress });
+  await waitForWriteSync(studentRef);
 }
 
 // ============ TAB: PROMPT GENERATOR ============
@@ -785,19 +884,42 @@ function showDropError(msg) {
 window.applyJson = async function () {
   if (!validatedJson) return;
 
+  if (!isOnline()) {
+    alert("Kamu sedang offline. Sambungkan ke internet dulu sebelum menerapkan soal, supaya modul benar-benar sampai ke server dan bisa dilihat siswa.");
+    return;
+  }
+
+  const applyBtn = document.getElementById("applyBtn");
+  applyBtn.disabled = true;
+  applyBtn.style.pointerEvents = "none";
+  applyBtn.textContent = "Menyimpan ke server...";
+
   try {
     const modId = "mod_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
-    await setDoc(doc(db, "modules", modId), validatedJson);
+    const modRef = doc(db, "modules", modId);
+    await setDoc(modRef, validatedJson);
+    await waitForWriteSync(modRef);
 
-    document.getElementById("dropSuccess").textContent = "Modul berhasil disimpan!";
+    document.getElementById("dropSuccess").textContent = "Modul berhasil disimpan dan terkonfirmasi tersimpan di server!";
     document.getElementById("dropSuccess").style.display = "block";
     document.getElementById("dropMsg").style.display = "none";
     document.getElementById("dropJson").value = "";
-    document.getElementById("applyBtn").disabled = true;
-    document.getElementById("applyBtn").style.opacity = "0.5";
-    document.getElementById("applyBtn").style.pointerEvents = "none";
+    applyBtn.textContent = "Gunakan Soal";
+    applyBtn.disabled = true;
+    applyBtn.style.opacity = "0.5";
+    applyBtn.style.pointerEvents = "none";
     validatedJson = null;
   } catch (err) {
+    applyBtn.disabled = false;
+    applyBtn.style.pointerEvents = "auto";
+    applyBtn.textContent = "Gunakan Soal";
+    if (err && err.isTimeout) {
+      showDropError(
+        "Belum ada konfirmasi dari server dalam 15 detik. Kemungkinan koneksi lemah/terputus — " +
+        "JANGAN tutup halaman ini, tunggu koneksi kembali, lalu periksa apakah modul sudah muncul sebelum mencoba Terapkan ulang (supaya tidak dobel)."
+      );
+      return;
+    }
     console.error("Failed to apply module:", err);
     showDropError("Gagal menyimpan modul: " + err.message);
   }
@@ -825,6 +947,11 @@ window.executeReset = async function () {
     return;
   }
 
+  if (!isOnline()) {
+    alert("Kamu sedang offline. Sambungkan ke internet dulu sebelum Reset Total, supaya penghapusan benar-benar tuntas di server (bukan cuma di perangkat ini).");
+    return;
+  }
+
   try {
     // Delete all documents in users, modules, esai_jawaban
     const collectionsToDelete = ["users", "modules", "esai_jawaban"];
@@ -843,11 +970,24 @@ window.executeReset = async function () {
       }
     }
 
+    // Verifikasi LANGSUNG ke server (bukan cache lokal) bahwa semua koleksi
+    // benar-benar sudah kosong sebelum bilang "berhasil" — batch.commit() bisa
+    // resolve dari cache lokal duluan kalau koneksi lagi tidak stabil.
+    for (const colName of collectionsToDelete) {
+      const verifySnap = await getDocsFromServer(collection(db, colName));
+      if (!verifySnap.empty) {
+        throw new Error(
+          `Verifikasi gagal: koleksi "${colName}" masih berisi ${verifySnap.size} data di server. ` +
+          `Kemungkinan koneksi terputus di tengah proses. Jangan tutup halaman, pastikan online, lalu coba Reset Total lagi.`
+        );
+      }
+    }
+
     // Clear local storage
     sessionStorage.clear();
     localStorage.clear();
 
-    alert("Semua data berhasil dihapus.");
+    alert("Semua data berhasil dihapus dan sudah terverifikasi kosong di server.");
     window.location.href = "index.html";
   } catch (err) {
     console.error("Reset failed:", err);
