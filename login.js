@@ -9,6 +9,7 @@ import {
 } from "./firebase-config.js";
 import { hashPassword, normalizeName, generateUid } from "./auth-helpers.js";
 import { seedModules } from "./seed-modules.js";
+import { waitForWriteSync } from "./sync-helpers.js";
 
 // Seed sample modules on first load
 seedModules();
@@ -140,7 +141,23 @@ window.loginGuru = async function (event) {
       isGuru: true,
       createdAt: Date.now(),
     };
-    await setDoc(doc(db, "users", newUid), newProfile);
+    const newRef = doc(db, "users", newUid);
+    await setDoc(newRef, newProfile);
+
+    try {
+      await waitForWriteSync(newRef, 10000);
+    } catch (syncErr) {
+      // Tetap lanjut login secara lokal supaya guru tidak terkunci saat
+      // koneksi lemah, tapi beri peringatan supaya guru tahu akunnya belum
+      // pasti tersimpan di server (misal belum bisa dipakai login dari
+      // perangkat lain sampai koneksi pulih dan sempat sinkron).
+      console.warn("Akun guru baru belum terkonfirmasi ke server:", syncErr);
+      alert(
+        "Peringatan: koneksi lemah/terputus. Akun guru barumu tersimpan sementara di perangkat ini, " +
+        "tapi belum terkonfirmasi ke server. Sebaiknya tetap online sebentar sebelum menutup halaman ini."
+      );
+    }
+
     sessionStorage.setItem("user", JSON.stringify(newProfile));
     window.location.href = "guru.html";
     return false;
