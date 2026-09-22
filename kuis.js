@@ -50,6 +50,7 @@ function loadDraft() {
     if (!raw) return null;
 
     const draft = JSON.parse(raw);
+
     if (
       !draft ||
       !Array.isArray(draft.answers) ||
@@ -520,10 +521,7 @@ function startQuiz() {
       clearDraft();
     } catch (err) {
       console.error("Failed to save progress:", err);
-
-      // JANGAN hapus draft kalau proses simpan gagal.
-      // Biarkan draft tetap ada supaya siswa bisa lanjut.
-      // Jika ingin, saat nanti berhasil bisa ditimpa.
+      // jangan hapus draft kalau proses simpan gagal
     }
 
     let detailHtml = '<div class="result-detail">';
