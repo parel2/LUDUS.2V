@@ -27,16 +27,68 @@ document.getElementById("quizTitle").textContent = "📖 " + (activeModule.judul
 
 const rawSoalList = activeModule.soal || [];
 const soalList = rawSoalList.map((s, i) => normalizeQuestion(s, i)).filter(Boolean);
-
 const content = document.getElementById("quizContent");
 
-// Check if this module was already completed by the student
 const savedProgress = JSON.parse(sessionStorage.getItem("activeProgress") || "null");
-const existingProgress = savedProgress || (user.progress || []).find(
-  (p) => p.moduleId === activeModule.id
-);
+const existingProgress =
+  savedProgress ||
+  (user.progress || []).find((p) => p.moduleId === activeModule.id);
 
-if (existingProgress) {
+const draftKey = `quizDraft:${user.uid}:${activeModule.id}`;
+
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(draftKey);
+    if (!raw) return null;
+
+    const draft = JSON.parse(raw);
+
+    if (
+      !draft ||
+      !Array.isArray(draft.answers) ||
+      draft.answers.length !== soalList.length
+    ) {
+      return null;
+    }
+
+    return draft;
+  } catch (err) {
+    console.warn("Draft soal tidak valid:", err);
+    return null;
+  }
+}
+
+function saveDraft(currentIndex, answers) {
+  try {
+    localStorage.setItem(
+      draftKey,
+      JSON.stringify({
+        moduleId: activeModule.id,
+        answers,
+        currentIndex,
+        updatedAt: Date.now(),
+      })
+    );
+  } catch (err) {
+    console.warn("Gagal menyimpan draft soal:", err);
+  }
+}
+
+function clearDraft() {
+  localStorage.removeItem(draftKey);
+}
+
+function hasAnyAnswer(answers) {
+  return answers.some((answer) => {
+    if (answer === null || answer === undefined) return false;
+    if (typeof answer === "string") return answer.trim() !== "";
+    if (typeof answer === "object") return Object.keys(answer).length > 0;
+    return true;
+  });
+}
+
+// Jika modul sudah selesai atau menunggu dinilai, tampilkan review
+if (existingProgress && ["selesai", "menunggu_dinilai"].includes(existingProgress.status)) {
   showReviewMode(existingProgress);
 } else {
   startQuiz();
@@ -44,25 +96,27 @@ if (existingProgress) {
 
 // ============ REVIEW MODE ============
 function showReviewMode(progress) {
-  // Render immediately with saved data so the page is never blank
   renderReview(progress, []);
 
-  // Then load essay answers to enrich the review
   const essayQuery = query(
     collection(db, "esai_jawaban"),
     where("uidSiswa", "==", user.uid)
   );
 
-  onSnapshot(essayQuery, (snap) => {
-    const essayAnswers = [];
-    snap.forEach((d) => {
-      const essay = { id: d.id, ...d.data() };
-      if (essay.moduleId === activeModule.id) essayAnswers.push(essay);
-    });
-    renderReview(progress, essayAnswers);
-  }, (error) => {
-    console.error("Failed to load review essays:", error);
-  });
+  onSnapshot(
+    essayQuery,
+    (snap) => {
+      const essayAnswers = [];
+      snap.forEach((d) => {
+        const essay = { id: d.id, ...d.data() };
+        if (essay.moduleId === activeModule.id) essayAnswers.push(essay);
+      });
+      renderReview(progress, essayAnswers);
+    },
+    (error) => {
+      console.error("Failed to load review essays:", error);
+    }
+  );
 }
 
 function renderReview(progress, essayAnswers) {
@@ -85,14 +139,15 @@ function renderReview(progress, essayAnswers) {
 
     if (grade.type === "pg") {
       const letters = ["A", "B", "C", "D", "E"];
-      const answerLabel = savedAnswer === null || savedAnswer === undefined
-        ? "Tidak dijawab"
-        : `${letters[savedAnswer] || (savedAnswer + 1)}. ${soal.opsi[savedAnswer] || ""}`;
+      const answerLabel =
+        savedAnswer === null || savedAnswer === undefined
+          ? "Tidak dijawab"
+          : `${letters[savedAnswer] || (savedAnswer + 1)}. ${soal.opsi[savedAnswer] || ""}`;
       const correctIdx = soal.jawaban;
       answerText = `Jawaban kamu: ${escapeHtml(answerLabel)} | Jawaban benar: ${letters[correctIdx] || (correctIdx + 1)}. ${escapeHtml(soal.opsi[correctIdx] || "")}`;
       explanation = grade.correct ? "Jawaban kamu benar." : "Jawaban kamu belum tepat.";
     } else if (grade.type === "isian") {
-      answerText = `Jawaban kamu: ${escapeHtml(savedAnswer || "(kosong)" )} | Jawaban benar: ${escapeHtml(soal.jawaban || "")}`;
+      answerText = `Jawaban kamu: ${escapeHtml(savedAnswer || "(kosong)") } | Jawaban benar: ${escapeHtml(soal.jawaban || "")}`;
       explanation = grade.correct ? "Jawaban kamu benar." : "Periksa kembali jawaban yang benar.";
     } else if (grade.type === "isian_kompleks") {
       const essay = essayAnswers.find((e) => e.soalId === "soal_" + i);
@@ -145,8 +200,28 @@ function renderReview(progress, essayAnswers) {
 
 // ============ QUIZ MODE ============
 function startQuiz() {
-  let currentIndex = 0;
-  let answers = new Array(soalList.length).fill(null);
+  const savedDraft = loadDraft();
+
+  let currentIndex = savedDraft
+    ? Math.min(
+        Math.max(Number(savedDraft.currentIndex) || 0, 0),
+        Math.max(soalList.length - 1, 0)
+      )
+    : 0;
+
+  let answers = savedDraft?.answers || new Array(soalList.length).fill(null);
+
+  if (savedDraft && hasAnyAnswer(answers)) {
+    const resume = confirm(
+      "Ditemukan jawaban yang tersimpan. Lanjutkan dari pengerjaan terakhir?"
+    );
+
+    if (!resume) {
+      currentIndex = 0;
+      answers = new Array(soalList.length).fill(null);
+      clearDraft();
+    }
+  }
 
   renderQuestion();
 
@@ -157,7 +232,7 @@ function startQuiz() {
     }
 
     const soal = soalList[currentIndex];
-    const progress = (currentIndex / soalList.length) * 100;
+    const progress = (currentIndex / Math.max(soalList.length, 1)) * 100;
 
     let body = "";
 
@@ -202,16 +277,24 @@ function startQuiz() {
         el.addEventListener("click", () => {
           const idx = parseInt(el.dataset.idx);
           answers[currentIndex] = idx;
+          saveDraft(currentIndex, answers);
+
           document.querySelectorAll(".option").forEach((o) => o.classList.remove("selected"));
           el.classList.add("selected");
         });
       });
     } else if (soal.tipe === "isian") {
       const input = document.getElementById("isianInput");
-      input.addEventListener("input", () => { answers[currentIndex] = input.value; });
+      input.addEventListener("input", () => {
+        answers[currentIndex] = input.value;
+        saveDraft(currentIndex, answers);
+      });
     } else if (soal.tipe === "isian_kompleks") {
       const input = document.getElementById("esaiInput");
-      input.addEventListener("input", () => { answers[currentIndex] = input.value; });
+      input.addEventListener("input", () => {
+        answers[currentIndex] = input.value;
+        saveDraft(currentIndex, answers);
+      });
     }
   }
 
@@ -258,6 +341,8 @@ function startQuiz() {
         }
       }
     }
+
+    saveDraft(currentIndex, answers);
     renderQuestion();
   };
 
@@ -266,10 +351,13 @@ function startQuiz() {
     delete currentAns[blankIdx];
     answers[currentIndex] = currentAns;
     selectedBlank = blankIdx;
+    saveDraft(currentIndex, answers);
     renderQuestion();
   };
 
   window.prevQuestion = function () {
+    saveDraft(currentIndex, answers);
+
     if (currentIndex > 0) {
       currentIndex--;
       renderQuestion();
@@ -277,6 +365,8 @@ function startQuiz() {
   };
 
   window.nextQuestion = function () {
+    saveDraft(currentIndex, answers);
+
     if (currentIndex < soalList.length - 1) {
       currentIndex++;
       renderQuestion();
@@ -335,7 +425,6 @@ function startQuiz() {
       </div>
     `;
 
-    // Save essay answers to esai_jawaban collection
     for (let i = 0; i < soalList.length; i++) {
       if (soalList[i].tipe === "isian_kompleks" && answers[i] && String(answers[i]).trim()) {
         const esaiId = "esai_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
@@ -353,6 +442,7 @@ function startQuiz() {
             status: "menunggu_dinilai",
             nilai: null,
             dinilaiOleh: null,
+            dinilaiOlehNama: null,
             submittedAt: Date.now(),
             reviewedAt: null,
           });
@@ -363,7 +453,6 @@ function startQuiz() {
       }
     }
 
-    // Save progress to student profile
     let syncConfirmed = false;
     try {
       const progressEntry = {
@@ -386,15 +475,17 @@ function startQuiz() {
       });
       await waitForWriteSync(userRef, 10000);
       syncConfirmed = true;
+      clearDraft();
     } catch (err) {
       console.error("Failed to save progress:", err);
+      clearDraft();
     }
-
 
     let detailHtml = '<div class="result-detail">';
     results.forEach((r, i) => {
       const cls = r.grade.pending ? "pending" : r.grade.correct ? "correct" : "wrong";
       let answerText = "";
+
       if (r.grade.type === "pg") {
         const letters = ["A", "B", "C", "D", "E"];
         answerText = r.answer !== null ? `Jawaban: ${letters[r.answer] || (r.answer + 1)}` : "Tidak dijawab";
@@ -411,8 +502,10 @@ function startQuiz() {
         const parts = Object.keys(ansMap).map((k) => ansMap[k]).join(", ");
         answerText += parts ? ` (${parts})` : "";
       }
+
       detailHtml += `<div class="result-item ${cls}"><div class="q">Soal ${i + 1}: ${escapeHtml((r.soal.pertanyaan || "").slice(0, 80))}${(r.soal.pertanyaan || "").length > 80 ? "..." : ""}</div><div class="a">${escapeHtml(answerText)}</div></div>`;
     });
+
     detailHtml += "</div>";
 
     content.innerHTML = `
