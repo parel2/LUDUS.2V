@@ -134,7 +134,6 @@ window.submitNewStudent = async function () {
   const normNama = normalizeName(nama);
 
   try {
-    // Cek duplikat: nama + kelas yang sama sudah terdaftar
     const dupSnap = await getDocs(
       query(
         collection(db, "users"),
@@ -143,6 +142,7 @@ window.submitNewStudent = async function () {
         where("role", "==", "siswa")
       )
     );
+
     if (!dupSnap.empty) {
       showAddStudentError("Siswa dengan nama ini sudah terdaftar di kelas tersebut.");
       return;
@@ -169,9 +169,6 @@ window.submitNewStudent = async function () {
 
     await setDoc(doc(db, "users", newUid), newProfile);
 
-    // JANGAN langsung anggap berhasil setelah setDoc() — kalau koneksi lemah/offline,
-    // data bisa cuma tersimpan di cache lokal perangkat ini dan belum benar-benar
-    // sampai ke server, sehingga tidak terlihat oleh siswa di perangkat lain.
     await waitForWriteSync(doc(db, "users", newUid));
 
     if (saveBtn) {
@@ -216,7 +213,6 @@ window.deleteStudent = async function (studentId, studentName, event) {
     await deleteDoc(studentRef);
     await waitForDeleteSync(studentRef);
 
-    // Bersihkan jawaban esai milik siswa ini supaya tidak ada data "yatim"
     const esaiSnap = await getDocs(
       query(collection(db, "esai_jawaban"), where("uidSiswa", "==", studentId))
     );
@@ -335,7 +331,6 @@ function renderStudentDetail(studentId) {
 
   const classModules = allModules.filter((m) => String(m.kelas) === String(s.kelas));
 
-  // Group modules by normalized title
   const titleGroups = {};
   classModules.forEach((mod) => {
     const norm = normalizeTitle(mod.judul);
@@ -343,7 +338,7 @@ function renderStudentDetail(studentId) {
     titleGroups[norm].push(mod);
   });
 
-  let detailHtml = '';
+  let detailHtml = "";
   Object.keys(titleGroups).forEach((normTitle) => {
     const groupMods = titleGroups[normTitle];
     const groupIds = groupMods.map((m) => m.id);
@@ -389,7 +384,6 @@ function renderStudentDetail(studentId) {
     detailHtml += `</div>`;
   });
 
-  // Final average
   const finalAvgHtml = summary.groupAverages.length > 0
     ? `<div style="margin-top:24px; padding-top:20px; border-top:2px solid var(--border);">
         <div style="font-size:1.2rem; font-weight:800; color:var(--primary-dark);">NILAI AKHIR = ${summary.finalAverage}</div>
@@ -453,7 +447,6 @@ function renderModuleStatus(progress) {
   const classModules = allModules.filter((m) => String(m.kelas) === activeClass);
   if (classModules.length === 0) return "";
 
-  // Group modules by normalized title
   const titleGroups = {};
   classModules.forEach((mod) => {
     const norm = normalizeTitle(mod.judul);
@@ -465,7 +458,6 @@ function renderModuleStatus(progress) {
     const groupMods = titleGroups[normTitle];
     const groupIds = groupMods.map((m) => m.id);
     const groupProgress = progress.filter((p) => groupIds.includes(p.moduleId));
-
     const displayTitle = stripRemedialPrefix(groupMods[0].judul);
     const groupIsRemedial = groupMods.every((m) => isRemedial(m.judul));
     let chipClass = "";
@@ -502,7 +494,6 @@ onSnapshot(collection(db, "esai_jawaban"), (snap) => {
   snap.forEach((d) => allEsai.push({ id: d.id, ...d.data() }));
   renderEsai();
 
-  // Repair progress records created before essay grading sync was added.
   allEsai
     .filter((essay) => essay.status === "dinilai")
     .forEach((essay) => {
@@ -677,6 +668,13 @@ window.generatePrompt = function () {
   const jumlahSambung = Math.max(0, parseInt(document.getElementById("promptSambung").value) || 0);
   const jumlahNum = jumlahPG + jumlahIsian + jumlahEsai + jumlahSambung;
 
+  const targetCounts = {
+    pilihan_ganda: jumlahPG,
+    isian: jumlahIsian,
+    isian_kompleks: jumlahEsai,
+    sambung: jumlahSambung,
+  };
+
   if (!judul) {
     alert("Isi judul modul terlebih dahulu.");
     return;
@@ -708,12 +706,22 @@ MATERI:
 ${materi}
 """
 
-INSTRUKSI:
-1. Buat soal dengan jumlah PERSIS sesuai rincian tipe berikut (jangan ditambah atau dikurangi):
+INSTRUKSI WAJIB:
+1. Buat jumlah soal PERSIS sesuai rincian berikut:
 ${rincian}
-2. Sesuaikan tingkat kesulitan dengan level ${level}.
-3. Gunakan bahasa Indonesia yang jelas dan mudah dipahami siswa SD kelas ${kelas}.
-4. Pastikan soal relevan dengan materi yang diberikan.
+2. Jika jumlah suatu tipe adalah 0, tipe tersebut DILARANG muncul dalam output.
+3. Jangan mengganti kekurangan satu tipe dengan menambah tipe lain.
+4. Jumlah pilihan ganda harus tepat ${jumlahPG}.
+5. Jumlah isian harus tepat ${jumlahIsian}.
+6. Jumlah esai/isian kompleks harus tepat ${jumlahEsai}.
+7. Jumlah sambung/menjodohkan harus tepat ${jumlahSambung}.
+8. Total seluruh soal harus tepat ${jumlahNum}.
+9. Sebelum mengeluarkan JSON, hitung ulang jumlah tiap tipe. Jika jumlahnya tidak sesuai, perbaiki terlebih dahulu.
+10. Jangan membuat soal tambahan sebagai contoh.
+11. Jangan membuat soal dari tipe yang jumlahnya 0.
+12. Sesuaikan tingkat kesulitan dengan level ${level}.
+13. Gunakan bahasa Indonesia yang jelas dan mudah dipahami siswa SD kelas ${kelas}.
+14. Pastikan semua soal relevan dengan materi yang diberikan.
 
 OUTPUT DALAM FORMAT JSON PERSIS SEPERTI CONTOH BERIKUT (jangan tambahkan teks di luar JSON):
 
@@ -739,6 +747,7 @@ Untuk tipe "isian_kompleks": tidak perlu field jawaban (akan dinilai manual oleh
 
 Pastikan total ${jumlahNum} soal dan output hanya JSON saja, tanpa penjelasan tambahan.`;
 
+  sessionStorage.setItem("promptTargetCounts", JSON.stringify(targetCounts));
   document.getElementById("promptOutput").value = prompt;
   document.getElementById("promptResult").style.display = "block";
 };
@@ -780,7 +789,6 @@ window.validateJson = function () {
     return;
   }
 
-  // Validate top-level fields
   if (!parsed.judul || typeof parsed.judul !== "string") {
     showDropError("Field 'judul' wajib ada dan berupa teks.");
     return;
@@ -796,6 +804,29 @@ window.validateJson = function () {
     showDropError("Field 'soal' wajib ada dan berupa array yang tidak kosong.");
     return;
   }
+
+  const targetCountsRaw = sessionStorage.getItem("promptTargetCounts");
+  if (!targetCountsRaw) {
+    showDropError(
+      "Buat prompt baru terlebih dahulu sebelum menempelkan JSON, agar jumlah setiap tipe soal dapat divalidasi."
+    );
+    return;
+  }
+
+  let targetCounts;
+  try {
+    targetCounts = JSON.parse(targetCountsRaw);
+  } catch (err) {
+    showDropError("Target jumlah soal tidak valid. Buat prompt baru terlebih dahulu.");
+    return;
+  }
+
+  const actualCounts = {
+    pilihan_ganda: 0,
+    isian: 0,
+    isian_kompleks: 0,
+    sambung: 0,
+  };
 
   const validTipes = ["pilihan_ganda", "isian", "isian_kompleks", "sambung"];
 
@@ -855,7 +886,6 @@ window.validateJson = function () {
         showDropError(`${prefix}tipe sambung harus punya field 'jawaban' berupa array tidak kosong.`);
         return;
       }
-      // Check that all answers exist in the word bank
       for (let j = 0; j < s.jawaban.length; j++) {
         if (!s.pilihan_kata.includes(s.jawaban[j])) {
           showDropError(`${prefix}jawaban "${s.jawaban[j]}" tidak ditemukan dalam pilihan_kata.`);
@@ -863,9 +893,50 @@ window.validateJson = function () {
         }
       }
     }
+
+    if (Object.prototype.hasOwnProperty.call(actualCounts, s.tipe)) {
+      actualCounts[s.tipe]++;
+    }
   }
 
-  // Valid!
+  const typeLabels = {
+    pilihan_ganda: "pilihan ganda",
+    isian: "isian",
+    isian_kompleks: "esai",
+    sambung: "sambung",
+  };
+
+  for (const tipe of Object.keys(targetCounts)) {
+    const expected = Number(targetCounts[tipe]) || 0;
+    const actual = actualCounts[tipe];
+
+    if (actual !== expected) {
+      showDropError(
+        `Jumlah ${typeLabels[tipe]} tidak sesuai. Diminta ${expected}, tetapi ditemukan ${actual}.`
+      );
+      return;
+    }
+
+    if (expected === 0 && actual > 0) {
+      showDropError(
+        `Tipe ${typeLabels[tipe]} dipilih 0, tetapi masih ditemukan ${actual} soal.`
+      );
+      return;
+    }
+  }
+
+  const expectedTotal = Object.values(targetCounts).reduce(
+    (sum, count) => sum + (Number(count) || 0),
+    0
+  );
+
+  if (parsed.soal.length !== expectedTotal) {
+    showDropError(
+      `Total soal tidak sesuai. Diminta ${expectedTotal}, tetapi ditemukan ${parsed.soal.length}.`
+    );
+    return;
+  }
+
   validatedJson = parsed;
   successEl.textContent = `Validasi berhasil! ${parsed.soal.length} soal siap diterapkan untuk Kelas ${kelasNum}.`;
   successEl.style.display = "block";
@@ -900,7 +971,10 @@ window.applyJson = async function () {
     await setDoc(modRef, validatedJson);
     await waitForWriteSync(modRef);
 
-    document.getElementById("dropSuccess").textContent = "Modul berhasil disimpan dan terkonfirmasi tersimpan di server!";
+    sessionStorage.removeItem("promptTargetCounts");
+
+    document.getElementById("dropSuccess").textContent =
+      "Modul berhasil disimpan dan terkonfirmasi tersimpan di server!";
     document.getElementById("dropSuccess").style.display = "block";
     document.getElementById("dropMsg").style.display = "none";
     document.getElementById("dropJson").value = "";
@@ -953,7 +1027,6 @@ window.executeReset = async function () {
   }
 
   try {
-    // Delete all documents in users, modules, esai_jawaban
     const collectionsToDelete = ["users", "modules", "esai_jawaban"];
 
     for (const colName of collectionsToDelete) {
@@ -961,7 +1034,6 @@ window.executeReset = async function () {
       const docs = [];
       snap.forEach((d) => docs.push(d));
 
-      // Batch delete (max 500 per batch)
       for (let i = 0; i < docs.length; i += 450) {
         const batch = writeBatch(db);
         const chunk = docs.slice(i, i + 450);
@@ -970,9 +1042,6 @@ window.executeReset = async function () {
       }
     }
 
-    // Verifikasi LANGSUNG ke server (bukan cache lokal) bahwa semua koleksi
-    // benar-benar sudah kosong sebelum bilang "berhasil" — batch.commit() bisa
-    // resolve dari cache lokal duluan kalau koneksi lagi tidak stabil.
     for (const colName of collectionsToDelete) {
       const verifySnap = await getDocsFromServer(collection(db, colName));
       if (!verifySnap.empty) {
@@ -983,7 +1052,6 @@ window.executeReset = async function () {
       }
     }
 
-    // Clear local storage
     sessionStorage.clear();
     localStorage.clear();
 
