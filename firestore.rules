@@ -6,12 +6,24 @@ service cloud.firestore {
     match /users/{uid} {
       allow read, create, update, delete: if true;
     }
+
+    // Modul yang SUDAH diterapkan ke siswa. Terkunci: dibuat sekali, tidak bisa diubah.
     match /modules/{id} {
       allow read: if true;
       allow create: if true;
-      allow update: if true;
+      allow update: if false;
       allow delete: if true;
     }
+
+    // Draft modul (belum terlihat siswa). Boleh diubah HANYA selama status masih "draft".
+    // Setelah diterapkan (status "diterapkan") dokumen ini ikut terkunci.
+    match /modul_draft/{id} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if resource.data.status == 'draft';
+      allow delete: if true;
+    }
+
     match /esai_jawaban/{id} {
       allow read: if true;
       allow create: if true;
