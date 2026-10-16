@@ -1,3 +1,4 @@
+// LUDUS — Versi 2.1 (pembahasan + peninjauan guru)
 import {
   db,
   setDoc,
@@ -9,7 +10,7 @@ import {
   where,
   onSnapshot,
 } from "./firebase-config.js";
-import { normalizeQuestion } from "./module-normalize.js";
+import { normalizeQuestion, gradeQuestion, TIPE_LABEL } from "./module-normalize.js";
 import { waitForWriteSync } from "./sync-helpers.js";
 
 const user = JSON.parse(sessionStorage.getItem("user") || "null");
@@ -19,6 +20,7 @@ if (!user || user.role !== "siswa" || !activeModule) {
   window.location.href = "siswa.html";
 }
 
+const LETTERS = ["A", "B", "C", "D", "E"];
 const draftKey = `quizDraft:${user.uid}:${activeModule.id}`;
 
 let quizState = {
@@ -101,6 +103,90 @@ if (existingProgress && ["selesai", "menunggu_dinilai"].includes(existingProgres
   startQuiz();
 }
 
+// ============ HASIL + PEMBAHASAN (dipakai layar hasil & mode review) ============
+function pembahasanHtml(soal) {
+  const text = String(soal.pembahasan || "").trim();
+  if (!text) {
+    return `<div class="pembahasan empty"><div class="pembahasan-title">💡 Pembahasan</div>
+      <div class="pembahasan-body">Pembahasan belum tersedia untuk soal ini.</div></div>`;
+  }
+  return `<div class="pembahasan"><div class="pembahasan-title">💡 Pembahasan</div>
+    <div class="pembahasan-body">${escapeHtml(text)}</div></div>`;
+}
+
+function reviewItemHtml(soal, answer, i, essayAnswers) {
+  const grade = gradeQuestion(soal, answer);
+  let cls = grade.pending ? "pending" : grade.correct ? "correct" : "wrong";
+  let verdict = grade.pending ? "Menunggu dinilai guru" : grade.correct ? "Jawabanmu benar" : "Jawabanmu belum tepat";
+  let body = "";
+  let showPembahasan = true;
+
+  if (grade.type === "pg") {
+    const unanswered = answer === null || answer === undefined || answer === "";
+    const opts = (soal.opsi || []).map((opt, k) => {
+      const isCorrect = k === soal.jawaban;
+      const isChosen = !unanswered && k === answer;
+      const optCls = isCorrect ? "rv-opt correct" : isChosen ? "rv-opt wrong" : "rv-opt";
+      let tag = "";
+      if (isCorrect && isChosen) tag = "Jawabanmu · Benar";
+      else if (isCorrect) tag = "Jawaban benar";
+      else if (isChosen) tag = "Jawabanmu";
+      return `<div class="${optCls}">
+        <span class="letter">${LETTERS[k] || k + 1}</span>
+        <span class="rv-text">${escapeHtml(opt)}</span>
+        ${tag ? `<span class="rv-tag">${tag}</span>` : ""}
+      </div>`;
+    }).join("");
+    body = `<div class="rv-options">${opts}</div>
+      ${unanswered ? '<div class="rv-note">Kamu tidak menjawab soal ini.</div>' : ""}`;
+  } else if (grade.type === "isian") {
+    const given = String(answer == null ? "" : answer).trim();
+    body = `<div class="rv-line ${grade.correct ? "ok" : "bad"}"><span class="rv-label">Jawabanmu</span> ${given ? escapeHtml(given) : "<em>(kosong)</em>"}</div>
+      <div class="rv-line ok"><span class="rv-label">Jawaban benar</span> ${escapeHtml(soal.jawaban || "")}</div>`;
+  } else if (grade.type === "sambung") {
+    const ansMap = answer || {};
+    const correctMap = soal.jawaban || {};
+    const parts = (soal.kalimat || []).map((part, k) => {
+      const given = ansMap[k];
+      const ok = grade.perBlank[k];
+      return `<div class="rv-sambung">
+        ${escapeHtml(part)}
+        <span class="rv-chip ${ok ? "ok" : "bad"}">${given ? escapeHtml(given) : "(kosong)"}</span>
+        ${ok ? "" : `<span class="rv-fix">seharusnya: <strong>${escapeHtml(correctMap[k] || "")}</strong></span>`}
+      </div>`;
+    }).join("");
+    body = parts;
+  } else if (grade.type === "isian_kompleks") {
+    const essay = (essayAnswers || []).find((e) => e.soalId === "soal_" + i);
+    const given = essay ? essay.jawabanSiswa : answer;
+    body = `<div class="rv-essay">${escapeHtml(given || "(kosong)")}</div>`;
+    if (essay && essay.status === "dinilai") {
+      cls = "correct";
+      verdict = `Dinilai guru: ${essay.nilai}`;
+      if (essay.catatanGuru) body += `<div class="rv-note">Catatan guru: ${escapeHtml(essay.catatanGuru)}</div>`;
+    } else {
+      cls = "pending";
+      verdict = "Menunggu dinilai guru";
+      body += '<div class="rv-note">Pembahasan akan muncul setelah guru memberi nilai.</div>';
+      showPembahasan = false;
+    }
+  }
+
+  return `<div class="result-item ${cls}">
+    <div class="q">Soal ${i + 1} · ${TIPE_LABEL[soal.tipe] || ""} <span class="rv-verdict">${verdict}</span></div>
+    <div class="q-text">${escapeHtml(soal.pertanyaan || "")}</div>
+    ${body}
+    ${showPembahasan ? pembahasanHtml(soal) : ""}
+  </div>`;
+}
+
+function reviewListHtml(answers, essayAnswers) {
+  return '<div class="result-detail">' +
+    soalList.map((s, i) => reviewItemHtml(s, answers[i], i, essayAnswers)).join("") +
+    "</div>";
+}
+
+// ============ MODE REVIEW (modul yang sudah selesai) ============
 function showReviewMode(progress) {
   renderReview(progress, []);
 
@@ -131,64 +217,7 @@ function renderReview(progress, essayAnswers) {
   const pendingCount = Number(progress.pendingCount) || 0;
   const finalScore = Number(progress.score) || 0;
   const hasPending = progress.status === "menunggu_dinilai" || pendingCount > 0;
-
-  let detailHtml = '<div class="result-detail">';
-
   const savedAnswers = Array.isArray(progress.answerSnapshot) ? progress.answerSnapshot : [];
-
-  soalList.forEach((soal, i) => {
-    const savedAnswer = savedAnswers[i];
-    const grade = gradeQuestion(soal, savedAnswer);
-    let cls = grade.pending ? "pending" : grade.correct ? "correct" : "wrong";
-    let answerText = "";
-    let explanation = "";
-
-    if (grade.type === "pg") {
-      const letters = ["A", "B", "C", "D", "E"];
-      const answerLabel =
-        savedAnswer === null || savedAnswer === undefined
-          ? "Tidak dijawab"
-          : `${letters[savedAnswer] || (savedAnswer + 1)}. ${soal.opsi[savedAnswer] || ""}`;
-      const correctIdx = soal.jawaban;
-      answerText = `Jawaban kamu: ${escapeHtml(answerLabel)} | Jawaban benar: ${letters[correctIdx] || (correctIdx + 1)}. ${escapeHtml(soal.opsi[correctIdx] || "")}`;
-      explanation = grade.correct ? "Jawaban kamu benar." : "Jawaban kamu belum tepat.";
-    } else if (grade.type === "isian") {
-      answerText = `Jawaban kamu: ${escapeHtml(savedAnswer || "(kosong)") } | Jawaban benar: ${escapeHtml(soal.jawaban || "")}`;
-      explanation = grade.correct ? "Jawaban kamu benar." : "Periksa kembali jawaban yang benar.";
-    } else if (grade.type === "isian_kompleks") {
-      const essay = essayAnswers.find((e) => e.soalId === "soal_" + i);
-      if (essay) {
-        if (essay.status === "dinilai") {
-          cls = "correct";
-          answerText = `Nilai guru: ${essay.nilai} | Jawaban kamu: ${essay.jawabanSiswa || ""}`;
-          explanation = essay.catatanGuru || `Dinilai oleh ${essay.dinilaiOlehNama || "Guru"}.`;
-        } else {
-          cls = "pending";
-          answerText = `Jawaban kamu: ${essay.jawabanSiswa || ""} | Status: Menunggu dinilai guru`;
-          explanation = "Guru belum memberikan nilai untuk jawaban ini.";
-        }
-      } else {
-        cls = "pending";
-        answerText = `Jawaban kamu: ${savedAnswer || "(kosong)"} | Menunggu dinilai guru`;
-        explanation = "Jawaban esai kamu sedang menunggu penilaian guru.";
-      }
-    } else if (grade.type === "sambung") {
-      const correctMap = soal.jawaban || {};
-      const answerMap = savedAnswer || {};
-      const correctParts = Object.keys(correctMap).map((k) => correctMap[k]).join(", ");
-      const answerParts = Object.keys(answerMap).map((k) => answerMap[k]).join(", ");
-      answerText = `Jawaban kamu: ${answerParts || "(kosong)"} | Jawaban benar: ${correctParts}`;
-      explanation = grade.correct ? "Semua pasangan jawaban benar." : "Ada pasangan jawaban yang belum tepat.";
-    }
-
-    detailHtml += `<div class="result-item ${cls}">
-      <div class="q">Soal ${i + 1}: ${escapeHtml((soal.pertanyaan || "").slice(0, 100))}${(soal.pertanyaan || "").length > 100 ? "..." : ""}</div>
-      <div class="a">${escapeHtml(answerText)}</div>
-      ${explanation ? `<div class="a" style="font-size:0.85rem; color:var(--text-muted); margin-top:4px;">${escapeHtml(explanation)}</div>` : ""}
-    </div>`;
-  });
-
-  detailHtml += "</div>";
 
   content.innerHTML = `
     <div class="card result-card">
@@ -197,13 +226,14 @@ function renderReview(progress, essayAnswers) {
       <div class="result-score">${finalScore}</div>
       <p style="color:var(--text-muted); font-size:1rem;">Benar ${autoCorrect} dari ${totalQuestions - pendingCount} soal yang dinilai otomatis</p>
       ${hasPending ? `<p style="color:#92400e; margin-top:8px;">${pendingCount} soal menunggu dinilai guru</p>` : ""}
-      <p style="margin-top:12px; color:var(--secondary-dark); font-weight:600;">Kamu sudah menyelesaikan modul ini. Berikut adalah hasil evaluasi dan pembahasan.</p>
-      ${detailHtml}
+      <p style="margin-top:12px; color:var(--secondary-dark); font-weight:600;">Kamu sudah menyelesaikan modul ini. Berikut hasil jawaban dan pembahasannya.</p>
+      ${reviewListHtml(savedAnswers, essayAnswers)}
       <button class="btn-primary btn-big" style="margin-top:24px;" onclick="goBack()">Kembali ke Dashboard</button>
     </div>
   `;
 }
 
+// ============ MENGERJAKAN SOAL ============
 function startQuiz() {
   const savedDraft = loadDraft();
 
@@ -246,11 +276,10 @@ function startQuiz() {
 
     if (soal.tipe === "pg") {
       const opts = soal.opsi || [];
-      const letters = ["A", "B", "C", "D", "E"];
       body = `<div class="options">` +
         opts.map((opt, i) => `
           <label class="option ${answers[currentIndex] === i ? "selected" : ""}" data-idx="${i}">
-            <span class="letter">${letters[i] || (i + 1)}</span>
+            <span class="letter">${LETTERS[i] || (i + 1)}</span>
             <span>${escapeHtml(opt)}</span>
             <input type="radio" name="opt" value="${i}" ${answers[currentIndex] === i ? "checked" : ""}>
           </label>
@@ -418,37 +447,6 @@ function startQuiz() {
     }
   };
 
-  function normalizeAnswer(str) {
-    return String(str || "").trim().toLowerCase().replace(/\s+/g, " ");
-  }
-
-  function gradeQuestion(soal, answer) {
-    if (soal.tipe === "pg") {
-      return { correct: answer === soal.jawaban, type: "pg", pending: false };
-    }
-    if (soal.tipe === "isian") {
-      const correct = normalizeAnswer(soal.jawaban);
-      const given = normalizeAnswer(answer);
-      return { correct: given === correct && given !== "", type: "isian", pending: false };
-    }
-    if (soal.tipe === "isian_kompleks") {
-      return { correct: null, type: "isian_kompleks", pending: true };
-    }
-    if (soal.tipe === "sambung") {
-      const correctMap = soal.jawaban || {};
-      const ansMap = answer || {};
-      let allCorrect = true;
-      for (let i = 0; i < (soal.kalimat || []).length; i++) {
-        if (normalizeAnswer(ansMap[i]) !== normalizeAnswer(correctMap[i])) {
-          allCorrect = false;
-          break;
-        }
-      }
-      return { correct: allCorrect, type: "sambung", pending: false };
-    }
-    return { correct: false, type: "unknown", pending: false };
-  }
-
   async function renderResults() {
     const results = soalList.map((s, i) => ({
       soal: s,
@@ -481,6 +479,7 @@ function startQuiz() {
             moduleTitle: activeModule.judul,
             soalId: "soal_" + i,
             pertanyaan: soalList[i].pertanyaan,
+            pembahasan: soalList[i].pembahasan || "",
             jawabanSiswa: answers[i],
             status: "menunggu_dinilai",
             nilai: null,
@@ -524,45 +523,6 @@ function startQuiz() {
       // jangan hapus draft kalau proses simpan gagal
     }
 
-    let detailHtml = '<div class="result-detail">';
-    results.forEach((r, i) => {
-      const cls = r.grade.pending ? "pending" : r.grade.correct ? "correct" : "wrong";
-      let answerText = "";
-
-      if (r.grade.type === "pg") {
-        const letters = ["A", "B", "C", "D", "E"];
-        answerText =
-          r.answer !== null && r.answer !== undefined
-            ? `Jawaban: ${letters[r.answer] || (r.answer + 1)}`
-            : "Tidak dijawab";
-
-        if (!r.grade.correct) {
-          answerText += ` | Benar: ${letters[r.soal.jawaban] || (r.soal.jawaban + 1)}`;
-        }
-      } else if (r.grade.type === "isian") {
-        answerText = `Jawaban: ${r.answer || "(kosong)"} | Benar: ${r.soal.jawaban}`;
-      } else if (r.grade.type === "isian_kompleks") {
-        answerText = "Menunggu dinilai guru";
-      } else if (r.grade.type === "sambung") {
-        const ansMap = r.answer || {};
-        answerText = r.grade.correct ? "Benar" : "Ada yang salah";
-        const parts = Object.keys(ansMap).map((k) => ansMap[k]).join(", ");
-        answerText += parts ? ` (${parts})` : "";
-      }
-
-      detailHtml += `
-        <div class="result-item ${cls}">
-          <div class="q">
-            Soal ${i + 1}: ${escapeHtml((r.soal.pertanyaan || "").slice(0, 80))}
-            ${(r.soal.pertanyaan || "").length > 80 ? "..." : ""}
-          </div>
-          <div class="a">${escapeHtml(answerText)}</div>
-        </div>
-      `;
-    });
-
-    detailHtml += "</div>";
-
     content.innerHTML = `
       <div class="card result-card">
         <h2>Hasil Pengerjaan</h2>
@@ -576,7 +536,8 @@ function startQuiz() {
         <div class="result-score">${score}</div>
         <p style="color:var(--text-muted); font-size:1rem;">Benar ${correctCount} dari ${graded.length} soal yang dinilai otomatis</p>
         ${pendingCount > 0 ? `<p style="color:#92400e; margin-top:8px;">${pendingCount} soal menunggu dinilai guru</p>` : ""}
-        ${detailHtml}
+        <p style="margin-top:12px; color:var(--secondary-dark); font-weight:600;">Lihat jawabanmu dan pembahasan tiap soal di bawah ini.</p>
+        ${reviewListHtml(answers, [])}
         <button class="btn-primary btn-big" style="margin-top:24px;" onclick="goBack()">Kembali ke Dashboard</button>
       </div>
     `;
