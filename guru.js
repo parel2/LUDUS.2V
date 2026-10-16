@@ -1,3 +1,4 @@
+// LUDUS — Versi 2.1 (pembahasan + peninjauan guru)
 import {
   db,
   collection,
@@ -13,7 +14,17 @@ import {
   deleteDoc,
   writeBatch,
 } from "./firebase-config.js";
-import { normalizeTitle, isRemedial, stripRemedialPrefix } from "./module-normalize.js";
+import {
+  normalizeTitle,
+  isRemedial,
+  stripRemedialPrefix,
+  normalizeQuestion,
+  blankQuestion,
+  validateSoalForPublish,
+  countMissingPembahasan,
+  countByTipe,
+  TIPE_LABEL,
+} from "./module-normalize.js";
 import { hashPassword, normalizeName, generateUid } from "./auth-helpers.js";
 import { waitForWriteSync, waitForDeleteSync, isOnline } from "./sync-helpers.js";
 
@@ -548,6 +559,10 @@ window.openEsaiDetail = function (esaiId) {
         <label>Jawaban Siswa</label>
         <div style="padding:14px 16px; background:var(--bg); border-radius:var(--radius); white-space:pre-wrap; line-height:1.7;">${escapeHtml(e.jawabanSiswa || "")}</div>
       </div>
+      ${e.pembahasan ? `<div class="form-group">
+        <label>Panduan Jawaban (pembahasan dari modul)</label>
+        <div style="padding:14px 16px; background:var(--success-light); border-radius:var(--radius); white-space:pre-wrap; line-height:1.7;">${escapeHtml(e.pembahasan)}</div>
+      </div>` : ""}
       <div class="form-group">
         <label for="esaiNilai">Nilai (0-100)</label>
         <input type="number" id="esaiNilai" min="0" max="100" placeholder="Masukkan nilai">
@@ -689,9 +704,9 @@ window.generatePrompt = function () {
   }
 
   const rincianList = [];
-  if (jumlahPG > 0) rincianList.push(`   - Pilihan ganda (Objektif): tepat ${jumlahPG} soal. 5 pilihan jawaban (A-E), tentukan jawaban benar.`);
+  if (jumlahPG > 0) rincianList.push(`   - Pilihan ganda (Objektif): tepat ${jumlahPG} soal. 5 pilihan jawaban, tentukan jawaban benar.`);
   if (jumlahIsian > 0) rincianList.push(`   - Isian: tepat ${jumlahIsian} soal. Siswa mengetik jawaban singkat, tentukan jawaban benar.`);
-  if (jumlahEsai > 0) rincianList.push(`   - Isian kompleks/esai: tepat ${jumlahEsai} soal. Siswa mengetik jawaban panjang, tidak perlu jawaban benar (akan dinilai manual guru).`);
+  if (jumlahEsai > 0) rincianList.push(`   - Isian kompleks/esai: tepat ${jumlahEsai} soal. Siswa mengetik jawaban panjang, tidak perlu jawaban benar (akan dinilai manual guru), tetapi tetap beri pembahasan berupa contoh jawaban ideal.`);
   if (jumlahSambung > 0) rincianList.push(`   - Sambung (Menjodohkan): tepat ${jumlahSambung} soal. Kalimat rumpang yang harus diisi dari bank kata yang disediakan.`);
   const rincian = rincianList.join("\n");
 
@@ -722,6 +737,7 @@ ${rincian}
 12. Sesuaikan tingkat kesulitan dengan level ${level}.
 13. Gunakan bahasa Indonesia yang jelas dan mudah dipahami siswa SD kelas ${kelas}.
 14. Pastikan semua soal relevan dengan materi yang diberikan.
+15. SETIAP soal WAJIB punya field "pembahasan" (lihat aturan pembahasan di bawah).
 
 OUTPUT DALAM FORMAT JSON PERSIS SEPERTI CONTOH BERIKUT (jangan tambahkan teks di luar JSON):
 
@@ -730,20 +746,27 @@ OUTPUT DALAM FORMAT JSON PERSIS SEPERTI CONTOH BERIKUT (jangan tambahkan teks di
   "kelas": ${kelas},
   "level": ${level},
   "soal": [
-    { "tipe": "pilihan_ganda", "pertanyaan": "...", "pilihan": ["A","B","C","D","E"], "jawaban_benar": "A" },
-    { "tipe": "isian", "pertanyaan": "...", "jawaban_benar": "..." },
-    { "tipe": "isian_kompleks", "pertanyaan": "..." },
-    { "tipe": "sambung", "kalimat": ["Bagian 1", "Bagian 2", "Bagian 3"], "pilihan_kata": ["kata1","kata2","kata3","kata4"], "jawaban": ["kata1","kata2","kata3"] }
+    { "tipe": "pilihan_ganda", "pertanyaan": "...", "pilihan": ["isi opsi 1","isi opsi 2","isi opsi 3","isi opsi 4","isi opsi 5"], "jawaban_benar": "isi opsi yang benar", "pembahasan": "..." },
+    { "tipe": "isian", "pertanyaan": "...", "jawaban_benar": "...", "pembahasan": "..." },
+    { "tipe": "isian_kompleks", "pertanyaan": "...", "pembahasan": "..." },
+    { "tipe": "sambung", "kalimat": ["Bagian 1", "Bagian 2", "Bagian 3"], "pilihan_kata": ["kata1","kata2","kata3","kata4"], "jawaban": ["kata1","kata2","kata3"], "pembahasan": "..." }
   ]
 }
 
-Untuk tipe "sambung": field "kalimat" berisi bagian-bagian kalimat yang dipisah, field "pilihan_kata" berisi bank kata (termasuk kata-kata pengecoh), dan field "jawaban" berisi kata-kata yang benar sesuai urutan bagian kosong.
-
-Untuk tipe "pilihan_ganda": field "pilihan" berisi 5 opsi, dan "jawaban_benar" berisi TEKS dari opsi yang benar (bukan huruf A-E).
+Untuk tipe "pilihan_ganda": field "pilihan" berisi 5 opsi (isi jawabannya saja, TANPA awalan huruf seperti "A." atau "B)"), semua opsi harus berbeda, dan "jawaban_benar" berisi TEKS dari opsi yang benar (sama persis dengan salah satu isi "pilihan", bukan huruf A-E).
 
 Untuk tipe "isian": "jawaban_benar" berisi jawaban singkat yang benar.
 
 Untuk tipe "isian_kompleks": tidak perlu field jawaban (akan dinilai manual oleh guru).
+
+Untuk tipe "sambung": setiap elemen "kalimat" adalah potongan teks yang DIIKUTI oleh SATU kotak kosong. Jumlah elemen "jawaban" harus sama dengan jumlah elemen "kalimat", dan urutannya sesuai kotak kosong tersebut. "pilihan_kata" adalah bank kata (termasuk beberapa kata pengecoh, semua kata berbeda) dan setiap isi "jawaban" harus ada di "pilihan_kata".
+
+ATURAN PEMBAHASAN (field "pembahasan"):
+- Isi dengan 2-4 kalimat sederhana yang menjelaskan MENGAPA jawaban yang benar itu benar, berdasarkan materi di atas.
+- Untuk pilihan ganda: sebutkan isi jawaban yang benar (JANGAN menyebut huruf A/B/C/D/E) lalu beri alasannya; boleh menambahkan singkat mengapa pilihan lain kurang tepat.
+- Untuk isian dan sambung: jelaskan alasan jawaban yang benar.
+- Untuk esai: tuliskan contoh jawaban ideal beserta poin-poin pentingnya.
+- Pembahasan harus tetap benar dibaca siswa yang menjawab BENAR maupun SALAH.
 
 Pastikan total ${jumlahNum} soal dan output hanya JSON saja, tanpa penjelasan tambahan.`;
 
@@ -760,7 +783,26 @@ window.copyPrompt = function () {
 };
 
 // ============ TAB: DROP SOAL ============
+// Alur: tempel JSON -> Validasi -> Terapkan  => modul masuk ke koleksi "modul_draft"
+//       (BELUM terlihat siswa)  => pilih  [Periksa] atau [Gunakan]
+//       Periksa  : guru meninjau/mengubah soal (tersimpan otomatis), lalu Terapkan
+//       Gunakan  : langsung dipakai siswa tanpa diperiksa
+//       Setelah diterapkan modul TERKUNCI (status "diterapkan") dan tidak bisa diubah lagi.
+const LETTERS = ["A", "B", "C", "D", "E"];
 let validatedJson = null;
+let draftModules = [];
+let editor = null;
+
+function escAttr(str) {
+  return escapeHtml(str).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function friendlyError(err) {
+  if (err && err.code === "permission-denied") {
+    return "Ditolak oleh database (permission-denied). Pastikan firestore.rules versi terbaru sudah dipublikasikan di Firebase Console (ada koleksi baru 'modul_draft').";
+  }
+  return (err && err.message) || String(err);
+}
 
 window.validateJson = function () {
   const raw = document.getElementById("dropJson").value.trim();
@@ -829,10 +871,16 @@ window.validateJson = function () {
   };
 
   const validTipes = ["pilihan_ganda", "isian", "isian_kompleks", "sambung"];
+  let missingPembahasan = 0;
 
   for (let i = 0; i < parsed.soal.length; i++) {
     const s = parsed.soal[i];
     const prefix = `Soal ${i + 1}: `;
+
+    if (!s || typeof s !== "object") {
+      showDropError(`${prefix}isi soal tidak valid.`);
+      return;
+    }
 
     if (!s.tipe || !validTipes.includes(s.tipe)) {
       showDropError(`${prefix}tipe tidak valid. Harus salah satu dari: ${validTipes.join(", ")}`);
@@ -855,6 +903,10 @@ window.validateJson = function () {
       }
       if (!s.pilihan.includes(s.jawaban_benar)) {
         showDropError(`${prefix}jawaban_benar "${s.jawaban_benar}" tidak ditemukan dalam pilihan.`);
+        return;
+      }
+      if (new Set(s.pilihan.map((p) => String(p).trim().toLowerCase())).size !== s.pilihan.length) {
+        showDropError(`${prefix}ada dua pilihan jawaban yang sama persis.`);
         return;
       }
     }
@@ -886,12 +938,21 @@ window.validateJson = function () {
         showDropError(`${prefix}tipe sambung harus punya field 'jawaban' berupa array tidak kosong.`);
         return;
       }
+      if (s.jawaban.length !== s.kalimat.length) {
+        showDropError(`${prefix}jumlah 'jawaban' (${s.jawaban.length}) harus sama dengan jumlah 'kalimat' (${s.kalimat.length}).`);
+        return;
+      }
       for (let j = 0; j < s.jawaban.length; j++) {
         if (!s.pilihan_kata.includes(s.jawaban[j])) {
           showDropError(`${prefix}jawaban "${s.jawaban[j]}" tidak ditemukan dalam pilihan_kata.`);
           return;
         }
       }
+    }
+
+    if (s.tipe !== "isian_kompleks") {
+      const pemb = s.pembahasan ?? s.penjelasan ?? s.alasan ?? "";
+      if (!String(pemb).trim()) missingPembahasan++;
     }
 
     if (Object.prototype.hasOwnProperty.call(actualCounts, s.tipe)) {
@@ -938,7 +999,11 @@ window.validateJson = function () {
   }
 
   validatedJson = parsed;
-  successEl.textContent = `Validasi berhasil! ${parsed.soal.length} soal siap diterapkan untuk Kelas ${kelasNum}.`;
+  let okMsg = `Validasi berhasil! ${parsed.soal.length} soal siap diterapkan untuk Kelas ${kelasNum}.`;
+  if (missingPembahasan > 0) {
+    okMsg += ` ⚠ ${missingPembahasan} soal belum punya "pembahasan" — bisa dilengkapi lewat tombol Periksa setelah diterapkan.`;
+  }
+  successEl.textContent = okMsg;
   successEl.style.display = "block";
   applyBtn.disabled = false;
   applyBtn.style.opacity = "1";
@@ -952,11 +1017,12 @@ function showDropError(msg) {
   msgEl.style.display = "block";
 }
 
+// "Terapkan" (tahap 1): simpan sebagai DRAFT. Belum terlihat siswa.
 window.applyJson = async function () {
   if (!validatedJson) return;
 
   if (!isOnline()) {
-    alert("Kamu sedang offline. Sambungkan ke internet dulu sebelum menerapkan soal, supaya modul benar-benar sampai ke server dan bisa dilihat siswa.");
+    alert("Kamu sedang offline. Sambungkan ke internet dulu sebelum menerapkan soal, supaya modul benar-benar sampai ke server.");
     return;
   }
 
@@ -967,18 +1033,31 @@ window.applyJson = async function () {
 
   try {
     const modId = "mod_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
-    const modRef = doc(db, "modules", modId);
-    await setDoc(modRef, validatedJson);
-    await waitForWriteSync(modRef);
+    const draftRef = doc(db, "modul_draft", modId);
+    const soal = validatedJson.soal.map((s, i) => normalizeQuestion(s, i)).filter(Boolean);
+    const now = Date.now();
+
+    await setDoc(draftRef, {
+      judul: validatedJson.judul.trim(),
+      kelas: parseInt(validatedJson.kelas),
+      level: Number(validatedJson.level) || 1,
+      soal,
+      status: "draft",
+      edited: false,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: user.uid,
+    });
+    await waitForWriteSync(draftRef);
 
     sessionStorage.removeItem("promptTargetCounts");
 
     document.getElementById("dropSuccess").textContent =
-      "Modul berhasil disimpan dan terkonfirmasi tersimpan di server!";
+      "Modul tersimpan sebagai draft (belum terlihat siswa). Lihat di bagian \"Modul Menunggu Peninjauan\" di bawah, lalu pilih Periksa atau Gunakan.";
     document.getElementById("dropSuccess").style.display = "block";
     document.getElementById("dropMsg").style.display = "none";
     document.getElementById("dropJson").value = "";
-    applyBtn.textContent = "Gunakan Soal";
+    applyBtn.textContent = "Terapkan";
     applyBtn.disabled = true;
     applyBtn.style.opacity = "0.5";
     applyBtn.style.pointerEvents = "none";
@@ -986,17 +1065,600 @@ window.applyJson = async function () {
   } catch (err) {
     applyBtn.disabled = false;
     applyBtn.style.pointerEvents = "auto";
-    applyBtn.textContent = "Gunakan Soal";
+    applyBtn.textContent = "Terapkan";
     if (err && err.isTimeout) {
       showDropError(
         "Belum ada konfirmasi dari server dalam 15 detik. Kemungkinan koneksi lemah/terputus — " +
-        "JANGAN tutup halaman ini, tunggu koneksi kembali, lalu periksa apakah modul sudah muncul sebelum mencoba Terapkan ulang (supaya tidak dobel)."
+        "JANGAN tutup halaman ini, tunggu koneksi kembali, lalu periksa apakah modul sudah muncul di daftar sebelum menekan Terapkan lagi (supaya tidak dobel)."
       );
       return;
     }
     console.error("Failed to apply module:", err);
-    showDropError("Gagal menyimpan modul: " + err.message);
+    showDropError("Gagal menyimpan modul: " + friendlyError(err));
   }
+};
+
+// ---------- Daftar modul draft ----------
+onSnapshot(
+  collection(db, "modul_draft"),
+  (snap) => {
+    draftModules = [];
+    snap.forEach((d) => draftModules.push({ id: d.id, ...d.data() }));
+    draftModules.sort(
+      (a, b) =>
+        (a.status === "draft" ? 0 : 1) - (b.status === "draft" ? 0 : 1) ||
+        (b.createdAt || 0) - (a.createdAt || 0)
+    );
+    renderDraftList();
+  },
+  (err) => {
+    console.error("Gagal memuat modul draft:", err);
+    const el = document.getElementById("draftList");
+    if (el) el.innerHTML = `<div class="error-msg show" style="display:block; grid-column:1/-1;">Gagal memuat daftar modul: ${escapeHtml(friendlyError(err))}</div>`;
+  }
+);
+
+function renderDraftList() {
+  const el = document.getElementById("draftList");
+  if (!el) return;
+
+  if (draftModules.length === 0) {
+    el.innerHTML = '<div class="empty-state" style="grid-column:1/-1; padding:30px 20px;"><div class="icon">🗂️</div>Belum ada modul. Tempel JSON soal di atas, lalu Validasi dan Terapkan.</div>';
+    return;
+  }
+
+  el.innerHTML = draftModules.map((m) => {
+    const locked = m.status !== "draft";
+    const soal = Array.isArray(m.soal) ? m.soal : [];
+    const c = countByTipe(soal);
+    const detail = [
+      c.pg ? `PG ${c.pg}` : "",
+      c.isian ? `Isian ${c.isian}` : "",
+      c.isian_kompleks ? `Esai ${c.isian_kompleks}` : "",
+      c.sambung ? `Jodoh ${c.sambung}` : "",
+    ].filter(Boolean).join(" · ");
+
+    const badge = locked
+      ? '<span class="status-badge done">Sudah diterapkan</span>'
+      : m.edited
+        ? '<span class="status-badge pending">Draft · sudah diperiksa/diubah</span>'
+        : '<span class="status-badge pending">Draft · belum diperiksa</span>';
+
+    const buttons = locked
+      ? `<div class="draft-actions"><button class="btn-outline" onclick="openDraftEditor('${m.id}')">Lihat</button></div>
+         <div class="module-meta">🔒 Terkunci — dipakai siswa, tidak bisa diubah lagi</div>`
+      : `<div class="draft-actions">
+           <button class="btn-outline" onclick="openDraftEditor('${m.id}')">Periksa</button>
+           <button class="btn-primary" onclick="quickApplyDraft('${m.id}')">Gunakan</button>
+         </div>`;
+
+    return `<div class="module-card draft-card ${locked ? "locked" : ""}">
+      <div class="module-icon">${locked ? "🔒" : "📝"}</div>
+      <div class="module-title">${escapeHtml(m.judul || "Tanpa Judul")}</div>
+      <div class="module-meta">Kelas ${escapeHtml(m.kelas)} · ${soal.length} soal</div>
+      <div class="module-meta">${detail}</div>
+      ${badge}
+      ${buttons}
+    </div>`;
+  }).join("");
+}
+
+function showDraftNotice(msg) {
+  const el = document.getElementById("draftNotice");
+  if (!el) return;
+  el.innerHTML = `<div class="draft-notice">${escapeHtml(msg)}</div>`;
+  setTimeout(() => { if (el.firstChild) el.innerHTML = ""; }, 9000);
+}
+
+// ---------- Terapkan modul ke siswa (mengunci modul) ----------
+function sanitizeSoal(soalList) {
+  const t = (v) => String(v == null ? "" : v).trim();
+  return soalList.map((s) => {
+    const out = { tipe: s.tipe, pertanyaan: t(s.pertanyaan), pembahasan: t(s.pembahasan) };
+    if (s.tipe === "pg") {
+      out.opsi = (s.opsi || []).map(t);
+      out.jawaban = s.jawaban;
+    } else if (s.tipe === "isian") {
+      out.jawaban = t(s.jawaban);
+    } else if (s.tipe === "sambung") {
+      out.kalimat = (s.kalimat || []).map(t);
+      out.bank = (s.bank || []).map(t);
+      out.jawaban = {};
+      Object.keys(s.jawaban || {}).forEach((k) => { out.jawaban[k] = t(s.jawaban[k]); });
+    }
+    return out;
+  });
+}
+
+async function publishDraft(mod) {
+  const modRef = doc(db, "modules", mod.id);
+  const draftRef = doc(db, "modul_draft", mod.id);
+  const soal = sanitizeSoal(mod.soal);
+  const judul = String(mod.judul).trim();
+  const kelas = parseInt(mod.kelas);
+  const now = Date.now();
+
+  // Satu batch = atomik: modul untuk siswa dibuat + draft dikunci sekaligus.
+  const batch = writeBatch(db);
+  batch.set(modRef, {
+    judul,
+    kelas,
+    level: Number(mod.level) || 1,
+    soal,
+    createdAt: now,
+    createdBy: user.uid,
+    dariDraft: mod.id,
+  });
+  batch.update(draftRef, {
+    judul,
+    kelas,
+    soal,
+    status: "diterapkan",
+    appliedAt: now,
+    appliedBy: user.uid,
+  });
+  await batch.commit();
+  await waitForWriteSync(modRef);
+}
+
+async function confirmAndPublish(mod) {
+  const missing = countMissingPembahasan(mod.soal);
+  let msg =
+    `Terapkan modul "${mod.judul}" untuk Kelas ${mod.kelas}?\n\n` +
+    `Setelah diterapkan:\n` +
+    `• Modul langsung bisa dikerjakan siswa Kelas ${mod.kelas}\n` +
+    `• Modul TERKUNCI dan tidak bisa diubah lagi`;
+  if (missing > 0) msg += `\n\n⚠ ${missing} soal belum punya pembahasan.`;
+  if (!confirm(msg)) return false;
+
+  if (!isOnline()) {
+    alert("Kamu sedang offline. Sambungkan ke internet dulu sebelum menerapkan modul.");
+    return false;
+  }
+
+  try {
+    await publishDraft(mod);
+    showDraftNotice(`Modul "${mod.judul}" sudah diterapkan dan terkunci. Siswa Kelas ${mod.kelas} sekarang bisa mengerjakannya.`);
+    return true;
+  } catch (err) {
+    if (err && err.isTimeout) {
+      alert(
+        "Belum ada konfirmasi dari server dalam 15 detik. Kemungkinan koneksi lemah/terputus — " +
+        "periksa dulu di daftar modul apakah statusnya sudah \"Sudah diterapkan\" sebelum mencoba lagi."
+      );
+      return false;
+    }
+    console.error("Gagal menerapkan modul:", err);
+    alert("Gagal menerapkan modul: " + friendlyError(err));
+    return false;
+  }
+}
+
+// Tombol "Gunakan" di kartu: langsung diterapkan tanpa masuk mode periksa.
+window.quickApplyDraft = async function (id) {
+  const d = draftModules.find((x) => x.id === id);
+  if (!d || d.status !== "draft") return;
+  const soal = (d.soal || []).map((s, i) => normalizeQuestion(s, i)).filter(Boolean);
+  const errors = validateSoalForPublish(soal);
+  if (errors.length > 0) {
+    alert(
+      "Modul ini belum bisa langsung digunakan karena ada bagian yang kurang:\n\n• " +
+      errors.slice(0, 5).map((e) => e.msg).join("\n• ") +
+      (errors.length > 5 ? `\n• ...dan ${errors.length - 5} lainnya` : "") +
+      "\n\nKlik Periksa untuk memperbaikinya."
+    );
+    return;
+  }
+  await confirmAndPublish({ id, judul: d.judul, kelas: d.kelas, level: d.level, soal });
+};
+
+// ---------- Mode PERIKSA (editor modul) ----------
+const dropEditorEl = document.getElementById("dropEditor");
+dropEditorEl.addEventListener("input", edOnInput);
+dropEditorEl.addEventListener("change", edOnInput);
+dropEditorEl.addEventListener("click", edOnClick);
+
+window.addEventListener("beforeunload", (e) => {
+  if (editor && editor.dirty) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
+
+window.openDraftEditor = function (id) {
+  const d = draftModules.find((x) => x.id === id);
+  if (!d) return;
+  const locked = d.status !== "draft";
+
+  editor = {
+    id,
+    readOnly: locked,
+    level: d.level || 1,
+    data: {
+      judul: d.judul || "",
+      kelas: String(d.kelas),
+      soal: (d.soal || []).map((s, i) => normalizeQuestion(s, i)).filter(Boolean),
+    },
+    saveTimer: null,
+    chain: Promise.resolve(true),
+    dirty: false,
+  };
+
+  document.getElementById("dropMain").style.display = "none";
+  dropEditorEl.style.display = "block";
+  dropEditorEl.innerHTML = editorShellHtml(editor);
+  edRenderQuestions();
+  window.scrollTo(0, 0);
+};
+
+function editorShellHtml(ed) {
+  const ro = ed.readOnly;
+  return `
+    <div class="ed-topbar">
+      <button class="btn-outline" onclick="closeDraftEditor()">← Kembali</button>
+      <span id="edSaveState" class="ed-save">${ro ? "🔒 Hanya bisa dilihat" : "✔ Tersimpan otomatis"}</span>
+    </div>
+    <div class="ed-banner ${ro ? "locked" : ""}">
+      ${ro
+        ? "🔒 Modul ini sudah diterapkan dan terkunci. Isinya hanya bisa dilihat, tidak bisa diubah lagi."
+        : "✏️ Mode periksa — tampilan sama seperti yang dilihat siswa, ditambah kunci jawaban. Semua perubahan tersimpan otomatis. Kalau sudah pas, klik <strong>Terapkan</strong> di bagian bawah. Setelah diterapkan modul terkunci dan tidak bisa diubah lagi."}
+    </div>
+    <div id="edErrors" class="error-msg" style="display:none;"></div>
+    <div class="card ed-head">
+      <div class="form-group">
+        <label for="edJudul">Judul Modul</label>
+        <input type="text" id="edJudul" value="${escAttr(ed.data.judul)}" ${ro ? "disabled" : ""}>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label for="edKelas">Kelas</label>
+        <select id="edKelas" ${ro ? "disabled" : ""}>
+          ${["3", "4", "5", "6"].map((k) => `<option value="${k}" ${ed.data.kelas === k ? "selected" : ""}>Kelas ${k}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <div id="edQuestions"></div>
+    ${ro ? "" : `
+    <div class="card ed-add">
+      <label for="edAddType">Tambah soal sendiri</label>
+      <div class="ed-add-row">
+        <select id="edAddType">
+          <option value="pg">Pilihan Ganda</option>
+          <option value="isian">Isian</option>
+          <option value="isian_kompleks">Esai</option>
+          <option value="sambung">Menjodohkan (Sambung)</option>
+        </select>
+        <button class="btn-secondary" data-act="addQ" style="white-space:nowrap;">+ Tambah Soal</button>
+      </div>
+    </div>
+    <button class="btn-primary btn-big" onclick="edPublish()">Terapkan — Pakai untuk Siswa</button>`}
+  `;
+}
+
+function edQuestionHtml(q, i, total, ro) {
+  const dis = ro ? "disabled" : "";
+  const di = `data-i="${i}"`;
+  let body = "";
+
+  if (q.tipe === "pg") {
+    body = `<div class="ed-label">Pilihan jawaban <span class="ed-help">(klik huruf untuk menandai jawaban yang benar)</span></div><div class="ed-options">` +
+      (q.opsi || []).map((o, k) => {
+        const correct = q.jawaban === k;
+        return `<div class="ed-opt ${correct ? "is-correct" : ""}">
+          <button type="button" class="ed-letter ${correct ? "on" : ""}" data-act="correct" ${di} data-k="${k}" title="Tandai sebagai jawaban benar" ${dis}>${LETTERS[k] || k + 1}</button>
+          <input type="text" class="ed-input" data-f="opsi" ${di} data-k="${k}" value="${escAttr(o)}" placeholder="Isi pilihan ${LETTERS[k] || k + 1}" ${dis}>
+          ${correct ? '<span class="ed-ok">✔ Benar</span>' : ""}
+          ${!ro && q.opsi.length > 2 ? `<button type="button" class="ed-mini" data-act="delOpt" ${di} data-k="${k}" title="Hapus pilihan ini">✕</button>` : ""}
+        </div>`;
+      }).join("") + `</div>` +
+      (!ro && q.opsi.length < 5 ? `<button type="button" class="ed-link" data-act="addOpt" ${di}>+ Tambah pilihan</button>` : "");
+  } else if (q.tipe === "isian") {
+    body = `<div class="ed-label">Kunci jawaban <span class="ed-help">(huruf besar/kecil dianggap sama)</span></div>
+      <input type="text" class="ed-input ed-key" data-f="jawaban" ${di} value="${escAttr(q.jawaban)}" placeholder="Jawaban yang benar" ${dis}>`;
+  } else if (q.tipe === "sambung") {
+    body = `<div class="ed-label">Kalimat <span class="ed-help">(tiap baris = teks + 1 kotak kosong setelahnya; pilih kata yang benar untuk kotak itu)</span></div>` +
+      (q.kalimat || []).map((part, k) => `<div class="ed-row">
+        <input type="text" class="ed-input" data-f="kalimat" ${di} data-k="${k}" value="${escAttr(part)}" placeholder="Teks bagian ${k + 1}" ${dis}>
+        <span class="match-blank ed-blank">____</span>
+        <select class="ed-input ed-sel ed-key" data-f="ans" ${di} data-k="${k}" ${dis}>${ansOptionsHtml(q, k)}</select>
+        ${!ro && q.kalimat.length > 1 ? `<button type="button" class="ed-mini" data-act="delPart" ${di} data-k="${k}" title="Hapus baris ini">✕</button>` : ""}
+      </div>`).join("") +
+      (!ro ? `<button type="button" class="ed-link" data-act="addPart" ${di}>+ Tambah baris kalimat</button>` : "") +
+      `<div class="ed-label" style="margin-top:14px;">Bank kata <span class="ed-help">(termasuk kata pengecoh)</span></div>
+      <div class="ed-bank">` +
+      (q.bank || []).map((w, k) => `<span class="ed-chip">
+        <input type="text" data-f="bank" ${di} data-k="${k}" value="${escAttr(w)}" placeholder="kata" ${dis}>
+        ${!ro ? `<button type="button" class="ed-mini" data-act="delWord" ${di} data-k="${k}" title="Hapus kata ini">✕</button>` : ""}
+      </span>`).join("") + `</div>` +
+      (!ro ? `<button type="button" class="ed-link" data-act="addWord" ${di}>+ Tambah kata</button>` : "");
+  } else if (q.tipe === "isian_kompleks") {
+    body = `<div class="ed-note">Soal esai dinilai manual oleh guru. Isi pembahasan di bawah sebagai contoh jawaban ideal — tampil ke siswa setelah jawabannya dinilai.</div>`;
+  }
+
+  const tools = ro ? "" : `<div class="ed-tools">
+      <button type="button" class="ed-mini" data-act="up" ${di} ${i === 0 ? "disabled" : ""} title="Naikkan">↑</button>
+      <button type="button" class="ed-mini" data-act="down" ${di} ${i === total - 1 ? "disabled" : ""} title="Turunkan">↓</button>
+      <button type="button" class="ed-mini danger" data-act="delQ" ${di} title="Hapus soal ini">🗑</button>
+    </div>`;
+
+  return `<div class="question-card ed-card" data-qi="${i}">
+    <div class="ed-qhead">
+      <div class="question-number">Soal ${i + 1} · ${TIPE_LABEL[q.tipe] || ""}</div>
+      ${tools}
+    </div>
+    <div class="ed-label">Pertanyaan</div>
+    <textarea class="ed-input ed-q" data-f="pertanyaan" ${di} ${dis}>${escapeHtml(q.pertanyaan || "")}</textarea>
+    ${body}
+    <div class="ed-label" style="margin-top:16px;">💡 Pembahasan <span class="ed-help">(dilihat siswa setelah menjawab)</span></div>
+    <textarea class="ed-input ed-pemb" data-f="pembahasan" ${di} placeholder="Jelaskan mengapa jawaban yang benar itu benar..." ${dis}>${escapeHtml(q.pembahasan || "")}</textarea>
+  </div>`;
+}
+
+function ansOptionsHtml(q, k) {
+  const current = (q.jawaban || {})[k];
+  return '<option value="">— pilih jawaban benar —</option>' +
+    (q.bank || []).map((w) => {
+      if (!String(w).trim()) return "";
+      return `<option value="${escAttr(w)}" ${current === w ? "selected" : ""}>${escapeHtml(w)}</option>`;
+    }).join("");
+}
+
+function edRenderQuestions() {
+  if (!editor) return;
+  const host = document.getElementById("edQuestions");
+  const y = window.scrollY;
+  const soal = editor.data.soal;
+  host.innerHTML = soal.length === 0
+    ? '<div class="empty-state" style="padding:30px;"><div class="icon">📝</div>Belum ada soal. Tambahkan soal di bawah.</div>'
+    : soal.map((q, i) => edQuestionHtml(q, i, soal.length, editor.readOnly)).join("");
+  window.scrollTo(0, y);
+}
+
+function edSyncSelects(i) {
+  const card = document.querySelector(`.ed-card[data-qi="${i}"]`);
+  if (!card || !editor) return;
+  const q = editor.data.soal[i];
+  card.querySelectorAll('select[data-f="ans"]').forEach((sel) => {
+    sel.innerHTML = ansOptionsHtml(q, Number(sel.dataset.k));
+  });
+}
+
+function edOnInput(e) {
+  const t = e.target;
+  if (!editor || editor.readOnly) return;
+
+  if (t.id === "edJudul") { editor.data.judul = t.value; edQueueSave(); return; }
+  if (t.id === "edKelas") { editor.data.kelas = t.value; edQueueSave(); return; }
+
+  const f = t.dataset && t.dataset.f;
+  if (!f) return;
+  const i = Number(t.dataset.i);
+  const k = Number(t.dataset.k);
+  const q = editor.data.soal[i];
+  if (!q) return;
+
+  switch (f) {
+    case "pertanyaan":
+    case "pembahasan":
+      q[f] = t.value;
+      break;
+    case "jawaban":
+      q.jawaban = t.value;
+      break;
+    case "opsi":
+      q.opsi[k] = t.value;
+      break;
+    case "kalimat":
+      q.kalimat[k] = t.value;
+      break;
+    case "bank": {
+      const old = q.bank[k];
+      q.bank[k] = t.value;
+      // jawaban yang memakai kata ini ikut berubah
+      Object.keys(q.jawaban).forEach((key) => {
+        if (q.jawaban[key] === old) q.jawaban[key] = t.value;
+      });
+      edSyncSelects(i);
+      break;
+    }
+    case "ans":
+      if (t.value === "") delete q.jawaban[k];
+      else q.jawaban[k] = t.value;
+      break;
+    default:
+      return;
+  }
+  edQueueSave();
+}
+
+function edOnClick(e) {
+  const b = e.target.closest("[data-act]");
+  if (!b || !editor || editor.readOnly || b.disabled) return;
+  const act = b.dataset.act;
+  const i = Number(b.dataset.i);
+  const k = Number(b.dataset.k);
+  const soal = editor.data.soal;
+  const q = soal[i];
+
+  if (act === "addQ") {
+    soal.push(blankQuestion(document.getElementById("edAddType").value));
+    edRenderQuestions();
+    edQueueSave();
+    const cards = document.querySelectorAll(".ed-card");
+    if (cards.length) cards[cards.length - 1].scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  if (!q) return;
+
+  switch (act) {
+    case "correct": q.jawaban = k; break;
+    case "addOpt": if (q.opsi.length < 5) q.opsi.push(""); break;
+    case "delOpt":
+      if (q.opsi.length > 2) {
+        q.opsi.splice(k, 1);
+        if (q.jawaban === k) q.jawaban = 0;
+        else if (q.jawaban > k) q.jawaban--;
+      }
+      break;
+    case "addPart": q.kalimat.push(""); break;
+    case "delPart":
+      if (q.kalimat.length > 1) {
+        q.kalimat.splice(k, 1);
+        const next = {};
+        Object.keys(q.jawaban).forEach((key) => {
+          const j = Number(key);
+          if (j === k) return;
+          next[j > k ? j - 1 : j] = q.jawaban[key];
+        });
+        q.jawaban = next;
+      }
+      break;
+    case "addWord": q.bank.push(""); break;
+    case "delWord": {
+      const w = q.bank[k];
+      q.bank.splice(k, 1);
+      Object.keys(q.jawaban).forEach((key) => {
+        if (q.jawaban[key] === w) delete q.jawaban[key];
+      });
+      break;
+    }
+    case "up":
+      if (i > 0) [soal[i - 1], soal[i]] = [soal[i], soal[i - 1]];
+      break;
+    case "down":
+      if (i < soal.length - 1) [soal[i + 1], soal[i]] = [soal[i], soal[i + 1]];
+      break;
+    case "delQ":
+      if (!confirm(`Hapus Soal ${i + 1}? Soal ini akan dibuang dari modul.`)) return;
+      soal.splice(i, 1);
+      break;
+    default:
+      return;
+  }
+  edRenderQuestions();
+  edQueueSave();
+}
+
+// ---------- Simpan otomatis ----------
+function setSaveState(ed, kind, err) {
+  if (editor !== ed) return;
+  const el = document.getElementById("edSaveState");
+  if (!el) return;
+  el.className = "ed-save " + kind;
+  if (kind === "pending") el.textContent = "⏳ Menyimpan...";
+  else if (kind === "saved") {
+    const d = new Date();
+    el.textContent = `✔ Tersimpan otomatis ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+  } else if (kind === "timeout") {
+    el.innerHTML = '⚠ Belum terkonfirmasi server — jangan tutup halaman. <button type="button" class="ed-link" onclick="edRetrySave()">Coba lagi</button>';
+  } else {
+    el.innerHTML = `⚠ Gagal menyimpan: ${escapeHtml(friendlyError(err))} <button type="button" class="ed-link" onclick="edRetrySave()">Coba lagi</button>`;
+  }
+}
+
+function edQueueSave() {
+  const ed = editor;
+  if (!ed || ed.readOnly) return;
+  ed.dirty = true;
+  setSaveState(ed, "pending");
+  clearTimeout(ed.saveTimer);
+  ed.saveTimer = setTimeout(() => { edFlush(ed); }, 700);
+}
+
+// Menyimpan semua perubahan; beberapa pemanggilan dijalankan berurutan (tidak tumpang tindih).
+function edFlush(ed) {
+  ed = ed || editor;
+  if (!ed || ed.readOnly) return Promise.resolve(true);
+  clearTimeout(ed.saveTimer);
+  ed.chain = ed.chain.then(() => edSaveOnce(ed));
+  return ed.chain;
+}
+
+async function edSaveOnce(ed) {
+  if (!ed.dirty) return true;
+  ed.dirty = false;
+  const snapshot = {
+    judul: ed.data.judul,
+    kelas: parseInt(ed.data.kelas),
+    soal: JSON.parse(JSON.stringify(ed.data.soal)),
+    edited: true,
+    updatedAt: Date.now(),
+  };
+  try {
+    const ref = doc(db, "modul_draft", ed.id);
+    await updateDoc(ref, snapshot);
+    await waitForWriteSync(ref, 15000);
+    if (!ed.dirty) setSaveState(ed, "saved");
+    return true;
+  } catch (err) {
+    ed.dirty = true;
+    console.error("Gagal menyimpan draft:", err);
+    setSaveState(ed, err && err.isTimeout ? "timeout" : "error", err);
+    return false;
+  }
+}
+
+window.edRetrySave = function () {
+  if (!editor) return;
+  editor.dirty = true;
+  setSaveState(editor, "pending");
+  edFlush(editor);
+};
+
+window.closeDraftEditor = async function () {
+  const ed = editor;
+  if (!ed) return;
+  if (!ed.readOnly) {
+    const ok = await edFlush(ed);
+    if (!ok && !confirm("Perubahan terakhir belum terkonfirmasi tersimpan di server. Tetap keluar dari mode periksa?")) {
+      return;
+    }
+  }
+  leaveEditor(ed);
+};
+
+function leaveEditor(ed) {
+  clearTimeout(ed.saveTimer);
+  editor = null;
+  dropEditorEl.style.display = "none";
+  dropEditorEl.innerHTML = "";
+  document.getElementById("dropMain").style.display = "";
+  renderDraftList();
+  window.scrollTo(0, 0);
+}
+
+// Tombol "Terapkan" di dalam mode periksa.
+window.edPublish = async function () {
+  const ed = editor;
+  if (!ed || ed.readOnly) return;
+
+  const saved = await edFlush(ed);
+  if (!saved) {
+    alert("Perubahan terakhir belum tersimpan ke server. Tunggu sampai tulisan \"Tersimpan otomatis\" muncul, lalu klik Terapkan lagi.");
+    return;
+  }
+
+  const errors = validateSoalForPublish(ed.data.soal);
+  if (!String(ed.data.judul).trim()) errors.unshift({ index: -1, msg: "Judul modul masih kosong." });
+
+  const errEl = document.getElementById("edErrors");
+  if (errors.length > 0) {
+    errEl.innerHTML = "<strong>Belum bisa diterapkan, perbaiki dulu:</strong><br>• " +
+      errors.map((e) => escapeHtml(e.msg)).join("<br>• ");
+    errEl.classList.add("show");
+    errEl.style.display = "block";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+  errEl.style.display = "none";
+
+  const done = await confirmAndPublish({
+    id: ed.id,
+    judul: ed.data.judul,
+    kelas: ed.data.kelas,
+    level: ed.level,
+    soal: ed.data.soal,
+  });
+  if (done) leaveEditor(ed);
 };
 
 // ============ TAB: PENGATURAN (RESET TOTAL) ============
@@ -1027,7 +1689,7 @@ window.executeReset = async function () {
   }
 
   try {
-    const collectionsToDelete = ["users", "modules", "esai_jawaban"];
+    const collectionsToDelete = ["users", "modules", "modul_draft", "esai_jawaban"];
 
     for (const colName of collectionsToDelete) {
       const snap = await getDocs(collection(db, colName));
